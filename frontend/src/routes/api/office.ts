@@ -33,6 +33,13 @@ export const Route = createFileRoute('/api/office')({
             const data = await proxy(`${BASE}/office/${resource}`)
             return json({ ok: true, ...data })
           }
+          if (resource === 'report-file') {
+            const file = url.searchParams.get('file') ?? ''
+            const data = await proxy(`${BASE}/office/report-file?file=${encodeURIComponent(file)}`)
+            return new Response(data, {
+              headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${file.split('/').pop()}"` },
+            })
+          }
           if (resource === 'auth' && action === 'me') {
             const data = await proxy(`${BASE}/office/auth/me`)
             return json({ ok: true, ...data })

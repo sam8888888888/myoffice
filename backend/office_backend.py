@@ -25,7 +25,7 @@ CORS_ORIGIN = os.environ.get("MYOFFICE_CORS_ORIGIN", "http://127.0.0.1")
 FLEET_URL = os.environ.get("MYOFFICE_FLEET_URL", "http://127.0.0.1:3120/fleet.json")
 PORT = int(os.environ.get("MYOFFICE_PORT", "3121"))
 
-LOCK = threading.Lock()
+LOCK = threading.RLock()  # RLock: re-entrant — fungsi dengan with LOCK boleh memanggil load_json/save_json (juga with LOCK)
 
 # ---------- auth ----------
 
@@ -492,37 +492,39 @@ def list_approvals(status=None):
 
 
 def submit_approval(payload, client_ip=None):
-    data = load_json(APPROVAL_FILE, APPROVAL_DEFAULT)
-    agent_id = payload.get("agent", "unknown")
-    paused, pause_reason = is_agent_paused(agent_id)
-    # terapkan policy (Fase 5): auto-approve / pending
-    policy_status, policy_note = evaluate_approval(payload)
-    status = "rejected" if paused else policy_status
-    note = f"Auto-tolak: agent dalam status pause ({pause_reason})" if paused else policy_note
-    # geofence aksi berisiko (Tahap 3): kalau melanggar → tidak auto-approve
-    if status == "approved":
-        gf_block = evaluate_geofence(payload, client_ip)
-        if gf_block:
-            status = "pending"
-            note = (note + " | " if note else "") + gf_block
-    item = {
-        "id": "ap_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "_" + str(len(data["items"]) + 1),
-        "agent": agent_id,
-        "type": payload.get("type", "other"),
-        "title": payload.get("title", ""),
-        "detail": payload.get("detail", ""),
-        "risk": payload.get("risk", "medium"),
-        "requested_at": now_iso(),
-        "sla_minutes": int(payload.get("sla_minutes", 30)),
-        "status": status,
-        "decided_by": "system" if status != "pending" else None,
-        "decided_at": now_iso() if status != "pending" else None,
-        "note": note,
-        "source": payload.get("source", "manual"),
-        "task_id": payload.get("task_id"),
-    }
-    data["items"].append(item)
-    save_json(APPROVAL_FILE, data)
+    # Fix audit v2 Bug#2: bungkus seluruh transaksi dalam satu LOCK (anti race condition)
+    with LOCK:
+        data = load_json(APPROVAL_FILE, APPROVAL_DEFAULT)
+        agent_id = payload.get("agent", "unknown")
+        paused, pause_reason = is_agent_paused(agent_id)
+        # terapkan policy (Fase 5): auto-approve / pending
+        policy_status, policy_note = evaluate_approval(payload)
+        status = "rejected" if paused else policy_status
+        note = f"Auto-tolak: agent dalam status pause ({pause_reason})" if paused else policy_note
+        # geofence aksi berisiko (Tahap 3): kalau melanggar → tidak auto-approve
+        if status == "approved":
+            gf_block = evaluate_geofence(payload, client_ip)
+            if gf_block:
+                status = "pending"
+                note = (note + " | " if note else "") + gf_block
+        item = {
+            "id": "ap_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "_" + str(len(data["items"]) + 1),
+            "agent": agent_id,
+            "type": payload.get("type", "other"),
+            "title": payload.get("title", ""),
+            "detail": payload.get("detail", ""),
+            "risk": payload.get("risk", "medium"),
+            "requested_at": now_iso(),
+            "sla_minutes": int(payload.get("sla_minutes", 30)),
+            "status": status,
+            "decided_by": "system" if status != "pending" else None,
+            "decided_at": now_iso() if status != "pending" else None,
+            "note": note,
+            "source": payload.get("source", "manual"),
+            "task_id": payload.get("task_id"),
+        }
+        data["items"].append(item)
+        save_json(APPROVAL_FILE, data)
     return item
 
 
@@ -2592,7 +2594,15 @@ def get_notifications(limit=20):
 # ---------- F3-1: AI Assistant "Tanya MyOffice" ----------
 
 def ask_myoffice(q):
-    """Jawab pertanyaan data live (rule-based — tanpa LLM eksternal)."""
+    """Jawab pertanyaan data live (rule-based — tanpa LLM eksternal).
+    Fix audit v2 Bug#2: seluruh fungsi di-wrapper error handling — tidak pernah 500."""
+    try:
+        return _ask_myoffice_impl(q)
+    except Exception as e:
+        return f"⚠️ Maaf, terjadi kendala menjawab: {type(e).__name__}. Coba lagi atau tanya yang lain."
+
+
+def _ask_myoffice_impl(q):
     q = (q or "").lower()
     if not q.strip():
         return "Tanya apa saja: 'spend minggu ini?', 'task pending nadine?', 'siapa online?', 'approval menunggu?'"
@@ -2770,19 +2780,28 @@ PARLIAMENT_DOMAIN = {
     "aaron": {"security", "secret_access", "audit", "deploy", "install"},
     "dinda": {"deploy", "install", "automation", "development", "secret_access"},
 }
+# Fix audit v2 Kekurangan#6: agent_weight — spesialis punya suara lebih berat di domainnya
+PARLIAMENT_WEIGHT = {
+    "aaron": {"security": 1.5, "secret_access": 1.5, "audit": 1.5, "deploy": 1.3, "install": 1.3},
+    "rena": {"ops": 1.5, "koordinasi": 1.5, "content": 1.2},
+    "farrah": {"spending": 1.5, "external_contact": 1.4, "bisnis": 1.3, "ops": 1.2},
+    "nadine": {"riset": 1.5, "findbuyer": 1.5, "project": 1.3, "content": 1.1},
+    "dinda": {"deploy": 1.5, "install": 1.5, "automation": 1.4, "development": 1.4},
+}
 
 
 def _parliament_vote(atype, risk):
-    """Vote rule-based: agent yang domainnya cocok → approve; terkait risiko → against;
-    lainnya abstain. Transparan (bukan magic) — bisa diganti LLM nanti."""
+    """Vote berbobot: agent yang domainnya cocok → approve dengan weight;
+    risiko tinggi & agent security → terhadap dengan weight; lainnya abstain."""
     votes = []
     for agent, dom in PARLIAMENT_DOMAIN.items():
+        weight = PARLIAMENT_WEIGHT.get(agent, {}).get(atype, 1.0)
         if atype in dom:
-            votes.append({"agent": agent, "vote": "approve", "reason": f"domain {atype}"})
+            votes.append({"agent": agent, "vote": "approve", "weight": weight, "reason": f"domain {atype}"})
         elif risk in ("high", "critical") and agent == "aaron":
-            votes.append({"agent": agent, "vote": "against", "reason": "risiko tinggi — perlu review"})
+            votes.append({"agent": agent, "vote": "against", "weight": 1.5, "reason": "risiko tinggi — perlu review"})
         else:
-            votes.append({"agent": agent, "vote": "abstain", "reason": "di luar domain"})
+            votes.append({"agent": agent, "vote": "abstain", "weight": 0, "reason": "di luar domain"})
     return votes
 
 
@@ -2797,12 +2816,14 @@ def start_parliament(payload):
     votes = _parliament_vote(atype, risk)
     approves = sum(1 for v in votes if v["vote"] == "approve")
     againsts = sum(1 for v in votes if v["vote"] == "against")
-    total_votes = approves + againsts
-    decision = "approved" if approves > againsts else ("rejected" if againsts > approves else "undecided")
+    w_approve = sum(v.get("weight", 1) for v in votes if v["vote"] == "approve")
+    w_against = sum(v.get("weight", 1) for v in votes if v["vote"] == "against")
+    decision = "approved" if w_approve > w_against else ("rejected" if w_against > w_approve else "undecided")
     sess = {
         "id": "par_" + hashlib.md5((issue + str(time.time())).encode()).hexdigest()[:8],
         "title": title, "issue": issue, "type": atype, "risk": risk,
         "votes": votes, "approves": approves, "againsts": againsts,
+        "w_approve": round(w_approve, 1), "w_against": round(w_against, 1),
         "decision": decision, "status": "decided" if decision != "undecided" else "open",
         "created_at": now_iso(),
     }
@@ -3800,8 +3821,12 @@ def send_json(handler, code, obj):
 
 
 def read_body(handler, max_body=2 * 1024 * 1024):
-    """Baca JSON body dengan limit ukuran (anti DoS memory)."""
-    length = int(handler.headers.get("Content-Length") or 0)
+    """Baca JSON body dengan limit ukuran (anti DoS memory).
+    Fix audit v2 Bug#1: Content-Length non-numeric/None → aman (tidak crash)."""
+    try:
+        length = int(handler.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        length = 0
     if length <= 0:
         return {}
     if length > max_body:
@@ -4492,6 +4517,22 @@ class Handler(BaseHTTPRequestHandler):
                 if err:
                     return send_json(self, 400, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, **res})
+            if path == "/office/report-file" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                rel = (qs.get("file") or [""])[0]
+                base_real = os.path.realpath(VAULT_ROOT)
+                fp = os.path.realpath(os.path.join(VAULT_ROOT, rel))
+                if not fp.startswith(base_real + os.sep) or not os.path.exists(fp):
+                    return send_json(self, 404, {"ok": False, "error": "file tidak ditemukan"})
+                with open(fp, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(fp)}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return None
             if path == "/office/license" and method == "GET":
                 return send_json(self, 200, {"ok": True, "license": get_license()})
             if path == "/office/license/activate" and method == "POST":

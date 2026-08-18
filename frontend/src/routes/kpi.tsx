@@ -88,6 +88,24 @@ export function KpiScreen() {
     },
     onError: () => setReportMsg('Gagal membuat laporan'),
   })
+  const exportXlsx = useMutation({
+    mutationFn: async (kind: string) => {
+      const res = await fetch('/api/office?resource=export-xlsx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = (await res.json()) as { file?: string }
+      if (d.file) window.open(`/api/office?resource=report-file&file=${encodeURIComponent(d.file)}`, '_blank')
+      return d
+    },
+    onSuccess: (d) => {
+      setReportMsg(`Excel dibuat & di-download → ${d.file?.split('/').pop() ?? ''}`)
+      setTimeout(() => setReportMsg(null), 6000)
+    },
+    onError: () => setReportMsg('Gagal membuat Excel'),
+  })
 
   const kpi = kpiQuery.data
   const rows = kpi?.rows ?? []
@@ -132,9 +150,16 @@ export function KpiScreen() {
             <button
               onClick={() => exportPdf.mutate('kpi')}
               disabled={exportPdf.isPending}
-              className="rounded-full border border-[var(--theme-border)] px-3 py-1 font-medium text-[var(--theme-text)] transition-colors hover:bg-[var(--theme-card2)] disabled:opacity-50"
+              className="rounded-lg border border-[var(--theme-border)] px-3 py-1.5 text-xs font-medium text-[var(--theme-muted)] hover:text-[var(--theme-text)]"
             >
               {exportPdf.isPending ? '⏳ …' : '📄 Export PDF'}
+            </button>
+            <button
+              onClick={() => exportXlsx.mutate('kpi')}
+              disabled={exportXlsx.isPending}
+              className="rounded-lg border border-emerald-500/30 px-3 py-1.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/10"
+            >
+              {exportXlsx.isPending ? '⏳ …' : '📊 Export Excel'}
             </button>
           </div>
         )}

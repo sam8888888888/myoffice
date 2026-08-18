@@ -176,3 +176,6 @@ echo "   1) Ganti logo: upload file ke public/myoffice-avatar.webp (atau set via
 echo "   2) Hubungkan domain & SSL (kalau belum)"
 echo "   3) Buka dashboard → mulai kasih task di /board"
 echo "=============================================="
+
+# --- Morning Brief (F1-11): ringkasan harian via Telegram tiap 07.00 WIB ---
+(crontab -l 2>/dev/null | grep -v 'morning_brief' ; echo "0 0 * * * /usr/bin/python3 /opt/myoffice/morning_brief.py >> /opt/myoffice/logs/morning_brief.log 2>&1") | crontab -
