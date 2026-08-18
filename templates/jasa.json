@@ -1,0 +1,50 @@
+{
+  "niche": "jasa",
+  "label": "Jasa / Layanan (UMKM)",
+  "org": {
+    "company": "Brand Jasa",
+    "departments": [
+      {"id": "admin", "name": "Administrasi", "lead": "admin", "members": ["admin"]},
+      {"id": "pemasaran", "name": "Pemasaran & Follow-up", "lead": "marketing", "members": ["marketing"]},
+      {"id": "keuangan", "name": "Keuangan", "lead": "finance", "members": ["finance"]}
+    ],
+    "agents": [
+      {"id": "admin", "name": "Admin Agent", "role": "Administrasi", "dept": "admin"},
+      {"id": "marketing", "name": "Marketing Agent", "role": "Pemasaran & Follow-up", "dept": "pemasaran"},
+      {"id": "finance", "name": "Finance Agent", "role": "Keuangan", "dept": "keuangan"}
+    ]
+  },
+  "payroll": {
+    "period": "2026-08",
+    "currency": "USD",
+    "warning_threshold_pct": 80,
+    "agents": [
+      {"id": "admin", "name": "Admin Agent", "salary_usd": 40},
+      {"id": "marketing", "name": "Marketing Agent", "salary_usd": 55},
+      {"id": "finance", "name": "Finance Agent", "salary_usd": 45}
+    ]
+  },
+  "policy": {
+    "auto_approve_types": ["tool_execution", "read"],
+    "auto_approve_risks": ["low"],
+    "require_approval_risks": ["high", "critical"],
+    "require_approval_types": ["deploy", "install", "secret_access", "spending", "external_contact"],
+    "spend_threshold_usd": 25,
+    "note": "Pengeluaran di atas $25 wajib approval. Promo/diskon besar wajib approval."
+  },
+  "caps": {
+    "auto_pause": true,
+    "global_budget_usd": 200,
+    "agent_caps": {"admin": 40, "marketing": 55, "finance": 45}
+  },
+  "board": [
+    {"title": "Follow-up lead minggu ini", "desc": "Hubungi semua lead yang belum closing, catat status", "agent": "marketing", "priority": "high", "sla_minutes": 720},
+    {"title": "Jadwalkan layanan pelanggan", "desc": "Koordinasi jadwal & konfirmasi ke pelanggan", "agent": "admin", "priority": "medium", "sla_minutes": 480},
+    {"title": "Laporan keuangan mingguan", "desc": "Rekap pemasukan/pengeluaran, flag anomali", "agent": "finance", "priority": "medium", "sla_minutes": 1440}
+  ],
+  "memory": [
+    {"title": "Profil usaha", "category": "company", "agent": null, "content": "Usaha jasa [jenis layanan]. Area layanan: [lokasi]. Jam operasional: [jam]. Harga: [paket]. Target: [target pelanggan]."},
+    {"title": "Aturan follow-up", "category": "system", "agent": "marketing", "content": "Lead baru dihubungi < 24 jam. Follow-up maksimal 3x kalau tidak ada respon, lalu status cold."},
+    {"title": "Aturan keuangan", "category": "system", "agent": "finance", "content": "Setiap pengeluaran dicatat. Di atas $25 wajib approval. Laporan mingguan setiap Jumat."}
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "niche": "ecommerce",
+  "label": "E-commerce / Toko Online",
+  "org": {
+    "company": "Brand Store",
+    "departments": [
+      {"id": "cs", "name": "Customer Service", "lead": "cs", "members": ["cs"]},
+      {"id": "ops", "name": "Operasional & Stok", "lead": "ops", "members": ["ops"]},
+      {"id": "pemasaran", "name": "Pemasaran", "lead": "marketing", "members": ["marketing"]}
+    ],
+    "agents": [
+      {"id": "cs", "name": "CS Agent", "role": "Customer Service", "dept": "cs"},
+      {"id": "ops", "name": "Ops Agent", "role": "Operasional & Stok", "dept": "ops"},
+      {"id": "marketing", "name": "Marketing Agent", "role": "Pemasaran", "dept": "pemasaran"}
+    ]
+  },
+  "payroll": {
+    "period": "2026-08",
+    "currency": "USD",
+    "warning_threshold_pct": 80,
+    "agents": [
+      {"id": "cs", "name": "CS Agent", "salary_usd": 50},
+      {"id": "ops", "name": "Ops Agent", "salary_usd": 60},
+      {"id": "marketing", "name": "Marketing Agent", "salary_usd": 70}
+    ]
+  },
+  "policy": {
+    "auto_approve_types": ["tool_execution", "read"],
+    "auto_approve_risks": ["low"],
+    "require_approval_risks": ["high", "critical"],
+    "require_approval_types": ["deploy", "install", "secret_access", "spending", "external_contact"],
+    "spend_threshold_usd": 30,
+    "note": "Spending iklan di atas $30 wajib approval. Diskon/refund di atas batas wajib approval."
+  },
+  "caps": {
+    "auto_pause": true,
+    "global_budget_usd": 250,
+    "agent_caps": {"cs": 50, "ops": 60, "marketing": 70}
+  },
+  "board": [
+    {"title": "Balas chat buyer yang pending", "desc": "Semua pertanyaan buyer di channel terjawab < 2 jam", "agent": "cs", "priority": "high", "sla_minutes": 120},
+    {"title": "Cek stok produk best-seller", "desc": "Update stok & reorder kalau di bawah minimum", "agent": "ops", "priority": "medium", "sla_minutes": 720},
+    {"title": "Draft kampanye promo mingguan", "desc": "Konsep promo + copy untuk approval", "agent": "marketing", "priority": "medium", "sla_minutes": 1440}
+  ],
+  "memory": [
+    {"title": "Profil toko", "category": "company", "agent": null, "content": "Toko online [deskripsi produk utama]. Channel: Shopee, [marketplace lain]. Target: [target pasar]. Harga di tengah pasar, unggul di layanan."},
+    {"title": "Aturan layanan pelanggan", "category": "system", "agent": "cs", "content": "Balas sopan & cepat. Refund/discount di luar kebijakan = approval dulu. Follow-up buyer yang tanya tapi belum beli."},
+    {"title": "Aturan iklan", "category": "system", "agent": "marketing", "content": "Setiap kampanye butuh approval sebelum jalan. Pantau ROAS, hentikan kalau di bawah target."}
+  ]
+}

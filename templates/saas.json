@@ -1,0 +1,50 @@
+{
+  "niche": "saas",
+  "label": "SaaS / Startup Teknologi",
+  "org": {
+    "company": "Brand SaaS",
+    "departments": [
+      {"id": "dev", "name": "Development", "lead": "dev", "members": ["dev"]},
+      {"id": "support", "name": "Customer Support", "lead": "support", "members": ["support"]},
+      {"id": "product", "name": "Product & Marketing", "lead": "product", "members": ["product"]}
+    ],
+    "agents": [
+      {"id": "dev", "name": "Dev Agent", "role": "Development", "dept": "dev"},
+      {"id": "support", "name": "Support Agent", "role": "Customer Support", "dept": "support"},
+      {"id": "product", "name": "Product Agent", "role": "Product & Marketing", "dept": "product"}
+    ]
+  },
+  "payroll": {
+    "period": "2026-08",
+    "currency": "USD",
+    "warning_threshold_pct": 80,
+    "agents": [
+      {"id": "dev", "name": "Dev Agent", "salary_usd": 120},
+      {"id": "support", "name": "Support Agent", "salary_usd": 60},
+      {"id": "product", "name": "Product Agent", "salary_usd": 90}
+    ]
+  },
+  "policy": {
+    "auto_approve_types": ["tool_execution", "read"],
+    "auto_approve_risks": ["low"],
+    "require_approval_risks": ["high", "critical"],
+    "require_approval_types": ["deploy", "install", "secret_access", "spending", "external_contact"],
+    "spend_threshold_usd": 100,
+    "note": "Deploy produksi wajib approval. Akses secret wajib approval. Spending infra di atas $100 wajib."
+  },
+  "caps": {
+    "auto_pause": true,
+    "global_budget_usd": 400,
+    "agent_caps": {"dev": 120, "support": 60, "product": 90}
+  },
+  "board": [
+    {"title": "Triage bug dari user", "desc": "Klasifikasi bug, prioritas, assign ke dev", "agent": "support", "priority": "high", "sla_minutes": 180},
+    {"title": "Sprint task: fitur baru", "desc": "Kerjakan task sprint sesuai spec, test dulu sebelum review", "agent": "dev", "priority": "high", "sla_minutes": 2880},
+    {"title": "Draft changelog rilis", "desc": "Ringkas perubahan rilis untuk pengumuman", "agent": "product", "priority": "low", "sla_minutes": 1440}
+  ],
+  "memory": [
+    {"title": "Profil produk", "category": "company", "agent": null, "content": "SaaS [nama produk] — [deskripsi satu kalimat]. Stack: [teknologi]. Pelanggan: [target]. Model harga: [freemium/langganan]."},
+    {"title": "Aturan deploy", "category": "system", "agent": "dev", "content": "JANGAN deploy ke produksi tanpa approval. Test dulu di staging. Backup sebelum migrasi."},
+    {"title": "Aturan support", "category": "system", "agent": "support", "content": "Tiket urgent < 2 jam, normal < 24 jam. Bug kritikal langsung flag + notify."}
+  ]
+}

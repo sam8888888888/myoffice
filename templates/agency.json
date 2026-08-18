@@ -1,0 +1,49 @@
+{
+  "niche": "agency",
+  "label": "Digital Agency",
+  "org": {
+    "company": "Brand Agency",
+    "departments": [
+      {"id": "ops", "name": "Koordinasi & Operasional", "lead": "operator", "members": ["operator"]},
+      {"id": "konten", "name": "Content & SEO", "lead": "content", "members": ["content"]},
+      {"id": "riset", "name": "Riset & Strategi", "lead": "riset", "members": ["riset"]}
+    ],
+    "agents": [
+      {"id": "operator", "name": "Operator", "role": "Koordinasi & Operasional", "dept": "ops"},
+      {"id": "content", "name": "Content Writer", "role": "Content & SEO", "dept": "konten"},
+      {"id": "riset", "name": "Researcher", "role": "Riset & Strategi", "dept": "riset"}
+    ]
+  },
+  "payroll": {
+    "period": "2026-08",
+    "currency": "USD",
+    "warning_threshold_pct": 80,
+    "agents": [
+      {"id": "operator", "name": "Operator", "salary_usd": 80},
+      {"id": "content", "name": "Content Writer", "salary_usd": 60},
+      {"id": "riset", "name": "Researcher", "salary_usd": 70}
+    ]
+  },
+  "policy": {
+    "auto_approve_types": ["tool_execution", "read"],
+    "auto_approve_risks": ["low"],
+    "require_approval_risks": ["high", "critical"],
+    "require_approval_types": ["deploy", "install", "secret_access", "spending", "external_contact"],
+    "spend_threshold_usd": 50,
+    "note": "Read-only & risiko low = auto-approve. Write/deploy/secret/spending & high+ = wajib approval."
+  },
+  "caps": {
+    "auto_pause": true,
+    "global_budget_usd": 300,
+    "agent_caps": {"operator": 80, "content": 60, "riset": 70}
+  },
+  "board": [
+    {"title": "Riset kompetitor untuk klien baru", "desc": "Analisa 5 kompetitor niche klien, ringkas ke 1 halaman", "agent": "riset", "priority": "high", "sla_minutes": 480},
+    {"title": "Draft artikel mingguan blog", "desc": "1 artikel SEO 1200 kata, outline disetujui dulu", "agent": "content", "priority": "medium", "sla_minutes": 1440},
+    {"title": "Laporan performa kampanye", "desc": "Rangkum metrik mingguan klien dari data yang ada", "agent": "operator", "priority": "medium", "sla_minutes": 720}
+  ],
+  "memory": [
+    {"title": "Profil brand ini", "category": "company", "agent": null, "content": "Agency yang melayani [deskripsi klien]. Layanan utama: SEO, konten, iklan digital. Standar kualitas: deliver sebelum deadline, laporan jelas."},
+    {"title": "Aturan kerja bersama", "category": "system", "agent": null, "content": "1) Selalu tanya konteks kalau belum jelas. 2) Ringkas hasil dengan angka. 3) Backup sebelum edit file penting."}
+  ]
+}

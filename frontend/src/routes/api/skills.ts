@@ -1,0 +1,527 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createFileRoute } from '@tanstack/react-router'
+import { json } from '@tanstack/react-start'
+import { isAuthenticated } from '../../server/auth-middleware'
+import {
+  ensureGatewayProbed,
+  getCapabilities,
+} from '../../server/gateway-capabilities'
+import { requireJsonContentType } from '../../server/rate-limit'
+
+type SkillsTab = 'installed' | 'marketplace' | 'featured'
+type SkillsSort = 'name' | 'category'
+
+type SecurityRisk = {
+  level: 'safe' | 'low' | 'medium' | 'high'
+  flags: Array<string>
+  score: number
+}
+
+type SkillSummary = {
+  id: string
+  slug: string
+  name: string
+  description: string
+  author: string
+  triggers: Array<string>
+  tags: Array<string>
+  homepage: string | null
+  category: string
+  icon: string
+  content: string
+  fileCount: number
+  sourcePath: string
+  installed: boolean
+  enabled: boolean
+  builtin?: boolean
+  featuredGroup?: string
+  security: SecurityRisk
+}
+
+const HERMES_API_URL = process.env.HERMES_API_URL || 'http://127.0.0.1:8642'
+
+const KNOWN_CATEGORIES = [
+  'All',
+  'Web & Frontend',
+  'Coding Agents',
+  'Git & GitHub',
+  'DevOps & Cloud',
+  'Browser & Automation',
+  'Image & Video',
+  'Search & Research',
+  'AI & LLMs',
+  'Productivity',
+  'Marketing & Sales',
+  'Communication',
+  'Data & Analytics',
+  'Finance & Crypto',
+] as const
+
+const FEATURED_SKILLS: Array<{ id: string; group: string }> = [
+  { id: 'dbalve/fast-io', group: 'Most Popular' },
+  { id: 'okoddcat/gitflow', group: 'Most Popular' },
+  { id: 'atomtanstudio/craft-do', group: 'Most Popular' },
+  { id: 'bro3886/gtasks-cli', group: 'New This Week' },
+  { id: 'vvardhan14/pokerpal', group: 'New This Week' },
+  {
+    id: 'veeramanikandanr48/docker-containerization',
+    group: 'Developer Tools',
+  },
+  { id: 'veeramanikandanr48/azure-auth', group: 'Developer Tools' },
+  { id: 'dbalve/fastio-skills', group: 'Productivity' },
+  { id: 'gillberto1/moltwallet', group: 'Productivity' },
+  { id: 'veeramanikandanr48/backtest-expert', group: 'Productivity' },
+]
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return {}
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readStringArray(value: unknown): Array<string> {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => readString(entry)).filter(Boolean)
+}
+
+function slugify(input: string): string {
+  const result = input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '')
+  return result || 'skill'
+}
+
+// ── Local skill preferences (enable/disable toggle) ────────────────────────
+// Stored in ~/.hermes/skills/.studio-prefs.json so the state survives restarts
+// and doesn't require gateway support.
+
+type StudioPrefs = { disabled: Array<string> }
+
+const PREFS_PATH = path.join(os.homedir(), '.hermes', 'skills', '.studio-prefs.json')
+
+function readLocalPrefs(): StudioPrefs {
+  try {
+    const raw = fs.readFileSync(PREFS_PATH, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<StudioPrefs>
+    return { disabled: Array.isArray(parsed.disabled) ? parsed.disabled : [] }
+  } catch {
+    return { disabled: [] }
+  }
+}
+
+function writeLocalPrefs(prefs: StudioPrefs): void {
+  try {
+    const dir = path.dirname(PREFS_PATH)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2))
+  } catch {
+    // non-fatal
+  }
+}
+
+// ── Local skills scanner ────────────────────────────────────────────────────
+// Reads skills installed at ~/.hermes/skills/{category}/{skill-name}/SKILL.md
+// Used when the Hermes gateway doesn't expose /api/skills.
+
+const LOCAL_SKILLS_DIR = path.join(os.homedir(), '.hermes', 'skills')
+
+function parseFrontmatter(content: string): { meta: Record<string, unknown>; body: string } {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
+  if (!match) return { meta: {}, body: content }
+  const meta: Record<string, unknown> = {}
+  // Minimal YAML line parser — handles key: value and nested hermes.tags arrays
+  let insideTags = false
+  for (const line of match[1].split('\n')) {
+    const scalar = line.match(/^(\w[\w-]*):\s*(.+)$/)
+    if (scalar) {
+      insideTags = false
+      meta[scalar[1]] = scalar[2].replace(/^["']|["']$/g, '').trim()
+    }
+    // tags: [a, b, c] inline
+    const inlineTags = line.match(/tags:\s*\[([^\]]*)\]/)
+    if (inlineTags) {
+      meta.tags = inlineTags[1].split(',').map((t) => t.trim()).filter(Boolean)
+      insideTags = false
+    }
+    // tags: (block list)
+    if (line.match(/^\s+tags:\s*$/)) { insideTags = true; meta.tags = []; continue }
+    if (insideTags && line.match(/^\s+-\s+(.+)/)) {
+      const tag = line.match(/^\s+-\s+(.+)/)![1].trim()
+      ;(meta.tags as string[]).push(tag)
+    }
+  }
+  return { meta, body: match[2].trim() }
+}
+
+function categoryFromDir(dirName: string): string {
+  const MAP: Record<string, string> = {
+    'apple': 'Productivity',
+    'autonomous-ai-agents': 'AI & LLMs',
+    'creative': 'Productivity',
+    'data-science': 'Data & Analytics',
+    'devops': 'DevOps & Cloud',
+    'diagramming': 'Productivity',
+    'domain': 'Productivity',
+    'email': 'Communication',
+    'feeds': 'Productivity',
+    'gaming': 'Productivity',
+    'gifs': 'Productivity',
+    'github': 'Git & GitHub',
+    'inference-sh': 'AI & LLMs',
+    'leisure': 'Productivity',
+    'mcp': 'AI & LLMs',
+    'media': 'Productivity',
+    'mlops': 'AI & LLMs',
+    'note-taking': 'Productivity',
+    'openfang': 'AI & LLMs',
+    'productivity': 'Productivity',
+    'red-teaming': 'DevOps & Cloud',
+    'research': 'Search & Research',
+    'smart-home': 'Productivity',
+    'social-media': 'Marketing & Sales',
+    'software-development': 'Coding Agents',
+  }
+  return MAP[dirName] || 'Productivity'
+}
+
+function readLocalSkills(): Array<SkillSummary> {
+  const skills: Array<SkillSummary> = []
+  if (!fs.existsSync(LOCAL_SKILLS_DIR)) return skills
+  const prefs = readLocalPrefs()
+  const disabledSet = new Set(prefs.disabled)
+
+  for (const categoryDir of fs.readdirSync(LOCAL_SKILLS_DIR)) {
+    if (categoryDir.startsWith('.') || categoryDir.endsWith('.md')) continue
+    const categoryPath = path.join(LOCAL_SKILLS_DIR, categoryDir)
+    if (!fs.statSync(categoryPath).isDirectory()) continue
+    const category = categoryFromDir(categoryDir)
+
+    for (const skillDir of fs.readdirSync(categoryPath)) {
+      if (skillDir.startsWith('.') || skillDir.endsWith('.md')) continue
+      const skillPath = path.join(categoryPath, skillDir)
+      if (!fs.statSync(skillPath).isDirectory()) continue
+
+      const mdPath = path.join(skillPath, 'SKILL.md')
+      if (!fs.existsSync(mdPath)) continue
+
+      try {
+        const raw = fs.readFileSync(mdPath, 'utf8')
+        const { meta, body } = parseFrontmatter(raw)
+        const id = `${categoryDir}/${skillDir}`
+        const name = typeof meta.name === 'string' ? meta.name : skillDir
+        const tags = Array.isArray(meta.tags) ? (meta.tags as string[]) : []
+        skills.push({
+          id,
+          slug: skillDir,
+          name,
+          description: typeof meta.description === 'string' ? meta.description : '',
+          author: typeof meta.author === 'string' ? meta.author : 'Hermes',
+          triggers: [],
+          tags,
+          homepage: null,
+          category,
+          icon: '✨',
+          content: body,
+          fileCount: fs.readdirSync(skillPath).length,
+          sourcePath: skillPath,
+          installed: true,
+          enabled: !disabledSet.has(id),
+          builtin: true,
+          security: { level: 'safe', flags: [], score: 0 },
+        })
+      } catch {
+        // skip corrupt skill
+      }
+    }
+  }
+  return skills
+}
+
+function normalizeSecurity(value: unknown): SecurityRisk {
+  const record = asRecord(value)
+  const level = readString(record.level)
+  return {
+    level:
+      level === 'low' ||
+      level === 'medium' ||
+      level === 'high' ||
+      level === 'safe'
+        ? level
+        : 'safe',
+    flags: readStringArray(record.flags),
+    score:
+      typeof record.score === 'number' && Number.isFinite(record.score)
+        ? record.score
+        : 0,
+  }
+}
+
+function guessCategory(record: Record<string, unknown>): string {
+  const direct =
+    readString(record.category) ||
+    readString(record.group) ||
+    readString(record.section)
+  if (direct) return direct
+  const tags = readStringArray(record.tags).map((tag) => tag.toLowerCase())
+  if (tags.some((tag) => tag.includes('frontend') || tag.includes('react'))) {
+    return 'Web & Frontend'
+  }
+  if (tags.some((tag) => tag.includes('browser'))) {
+    return 'Browser & Automation'
+  }
+  if (tags.some((tag) => tag.includes('git'))) {
+    return 'Git & GitHub'
+  }
+  if (tags.some((tag) => tag.includes('ai') || tag.includes('llm'))) {
+    return 'AI & LLMs'
+  }
+  return 'Productivity'
+}
+
+function normalizeSkill(value: unknown): SkillSummary | null {
+  const record = asRecord(value)
+  const id =
+    readString(record.id) || readString(record.slug) || readString(record.name)
+  if (!id) return null
+
+  const name = readString(record.name) || id
+  const sourcePath =
+    readString(record.sourcePath) ||
+    readString(record.path) ||
+    readString(record.file) ||
+    ''
+
+  return {
+    id,
+    slug: readString(record.slug) || slugify(id),
+    name,
+    description: readString(record.description),
+    author:
+      readString(record.author) ||
+      readString(record.owner) ||
+      readString(record.publisher),
+    triggers: readStringArray(record.triggers),
+    tags: readStringArray(record.tags),
+    homepage: readString(record.homepage) || null,
+    category: guessCategory(record),
+    icon: readString(record.icon) || '✨',
+    content:
+      readString(record.content) ||
+      readString(record.readme) ||
+      readString(record.prompt),
+    fileCount:
+      typeof record.fileCount === 'number' && Number.isFinite(record.fileCount)
+        ? record.fileCount
+        : 0,
+    sourcePath,
+    installed: Boolean(record.installed ?? false),
+    enabled: Boolean(record.enabled ?? record.installed ?? false),
+    builtin: Boolean(record.builtin),
+    featuredGroup: undefined,
+    security: normalizeSecurity(record.security),
+  }
+}
+
+async function fetchHermesSkills(): Promise<Array<SkillSummary>> {
+  const response = await fetch(`${HERMES_API_URL}/api/skills`)
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(body || `Hermes skills request failed (${response.status})`)
+  }
+
+  const payload = (await response.json()) as unknown
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(asRecord(payload).items)
+      ? (asRecord(payload).items as Array<unknown>)
+      : Array.isArray(asRecord(payload).skills)
+        ? (asRecord(payload).skills as Array<unknown>)
+        : []
+
+  const prefs = readLocalPrefs()
+  const disabledSet = new Set(prefs.disabled)
+
+  return items
+    .map((entry) => normalizeSkill(entry))
+    .filter((entry): entry is SkillSummary => entry !== null)
+    .map((skill) => ({
+      ...skill,
+      // Local prefs override the gateway's enabled state
+      enabled: skill.installed && !disabledSet.has(skill.id),
+    }))
+}
+
+function matchesSearch(skill: SkillSummary, rawSearch: string): boolean {
+  const search = rawSearch.trim().toLowerCase()
+  if (!search) return true
+
+  return [
+    skill.id,
+    skill.name,
+    skill.description,
+    skill.author,
+    skill.category,
+    ...skill.tags,
+    ...skill.triggers,
+  ]
+    .join('\n')
+    .toLowerCase()
+    .includes(search)
+}
+
+function sortSkills(skills: Array<SkillSummary>, sort: SkillsSort) {
+  return [...skills].sort((left, right) => {
+    if (sort === 'category') {
+      const categoryCompare = left.category.localeCompare(right.category)
+      if (categoryCompare !== 0) return categoryCompare
+    }
+    return left.name.localeCompare(right.name)
+  })
+}
+
+export const Route = createFileRoute('/api/skills')({
+  server: {
+    handlers: {
+      GET: async ({ request }) => {
+        if (!isAuthenticated(request)) {
+          return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        }
+        await ensureGatewayProbed()
+
+        try {
+          const url = new URL(request.url)
+          const tabParam = url.searchParams.get('tab')
+          const tab: SkillsTab =
+            tabParam === 'installed' ||
+            tabParam === 'marketplace' ||
+            tabParam === 'featured'
+              ? tabParam
+              : 'installed'
+          const rawSearch = (url.searchParams.get('search') || '').trim()
+          const category = (url.searchParams.get('category') || 'All').trim()
+          const sortParam = (url.searchParams.get('sort') || 'name').trim()
+          const sort: SkillsSort =
+            sortParam === 'category' || sortParam === 'name'
+              ? sortParam
+              : 'name'
+          const page = Math.max(1, Number(url.searchParams.get('page') || '1'))
+          const limit = Math.min(
+            60,
+            Math.max(1, Number(url.searchParams.get('limit') || '30')),
+          )
+
+          // Use local filesystem scan when gateway doesn't expose /api/skills
+          const sourceItems = getCapabilities().skills
+            ? await fetchHermesSkills()
+            : readLocalSkills()
+          const installedLookup = new Set(
+            sourceItems
+              .filter((skill) => skill.installed)
+              .map((skill) => skill.id),
+          )
+
+          const filteredByTab = sourceItems.filter((skill) => {
+            if (tab === 'featured') return true
+            if (tab === 'installed') return skill.installed
+            return true
+          })
+
+          const featuredLookup = new Map(
+            FEATURED_SKILLS.map((entry) => [entry.id, entry.group]),
+          )
+
+          const filtered = sortSkills(
+            filteredByTab
+              .map((skill) => ({
+                ...skill,
+                installed: installedLookup.has(skill.id),
+                featuredGroup: featuredLookup.get(skill.id),
+              }))
+              .filter((skill) => {
+                if (tab === 'featured' && !skill.featuredGroup) return false
+                if (!matchesSearch(skill, rawSearch)) return false
+                if (category !== 'All' && skill.category !== category) {
+                  return false
+                }
+                return true
+              }),
+            sort,
+          )
+
+          const total = filtered.length
+          const start = (page - 1) * limit
+          const skills = filtered.slice(start, start + limit)
+
+          return json({
+            skills,
+            total,
+            page,
+            categories: KNOWN_CATEGORIES,
+          })
+        } catch (err) {
+          return json(
+            { error: err instanceof Error ? err.message : String(err) },
+            { status: 500 },
+          )
+        }
+      },
+      POST: async ({ request }) => {
+        if (!isAuthenticated(request)) {
+          return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        }
+        const csrfCheck = requireJsonContentType(request)
+        if (csrfCheck) return csrfCheck
+
+        try {
+          const body = (await request.json()) as {
+            action?: string
+            skillId?: string
+            enabled?: boolean
+          }
+          const action = (body.action || '').trim()
+          const skillId = (body.skillId || '').trim()
+
+          if (!skillId) {
+            return json({ ok: false, error: 'skillId required' }, { status: 400 })
+          }
+
+          if (action === 'toggle') {
+            const prefs = readLocalPrefs()
+            const nowEnabled = Boolean(body.enabled)
+            if (nowEnabled) {
+              prefs.disabled = prefs.disabled.filter((id) => id !== skillId)
+            } else {
+              if (!prefs.disabled.includes(skillId)) {
+                prefs.disabled.push(skillId)
+              }
+            }
+            writeLocalPrefs(prefs)
+            return json({ ok: true, skillId, enabled: nowEnabled })
+          }
+
+          return json(
+            { ok: false, error: `Unknown action: ${action}` },
+            { status: 400 },
+          )
+        } catch (err) {
+          return json(
+            {
+              ok: false,
+              error: err instanceof Error ? err.message : 'Request failed',
+            },
+            { status: 500 },
+          )
+        }
+      },
+    },
+  },
+})
