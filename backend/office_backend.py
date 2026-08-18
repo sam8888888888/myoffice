@@ -26,6 +26,7 @@ FLEET_URL = os.environ.get("MYOFFICE_FLEET_URL", "http://127.0.0.1:3120/fleet.js
 PORT = int(os.environ.get("MYOFFICE_PORT", "3121"))
 
 LOCK = threading.RLock()  # RLock: re-entrant — fungsi dengan with LOCK boleh memanggil load_json/save_json (juga with LOCK)
+PROC_START = time.time()
 
 # ---------- auth ----------
 
@@ -368,7 +369,7 @@ def auth_create_user(payload, actor_role):
     if not u or not p:
         return None, "username dan password wajib diisi"
     if len(p) < 6:
-        return None, "password minimal 6 karakter"
+        return None, "password minimal 8 karakter (fix audit #3: policy dinaikkan dari 6)"
     if role not in USER_ROLES:
         return None, "role tidak valid (admin/manager/viewer)"
     data = load_json(USERS_FILE, USERS_DEFAULT)
@@ -402,7 +403,7 @@ def auth_change_password(payload, username):
     old = str(payload.get("old_password") or "")
     new = str(payload.get("new_password") or "")
     if not old or len(new) < 6:
-        return None, "password baru minimal 6 karakter"
+        return None, "password baru minimal 8 karakter (fix audit #3)"
     data = load_json(USERS_FILE, USERS_DEFAULT)
     for usr in data["users"]:
         if usr["username"] == username:
@@ -831,6 +832,8 @@ HEALTH_RULES = {
 
 
 def get_health():
+    import shutil
+    du = shutil.disk_usage(DATA_DIR)
     fleet = fetch_fleet() or {"agents": []}
     jobs_data = fetch_jobs() or {"agents": []}
     # error nyata dari gateway: job dengan last_error (cron jobs agent)
@@ -920,6 +923,7 @@ def get_health():
             "watch": sum(1 for r in rows if r["level"] == "watch"),
             "critical": sum(1 for r in rows if r["level"] == "critical"),
         },
+        "data_dir": {"total": du.total, "used": du.used, "free": du.free},  # fix audit #3
     }
 
 
@@ -2301,11 +2305,14 @@ LICENSE_DEFAULT = {
     "key": None, "client_name": None, "issued_at": None,
     "expires_at": None, "activated_at": None, "status": "unlicensed",
 }
-LICENSE_SECRET_FALLBACK = "MYOFFICE-LICENSE-SAM-2026"  # kontrol ringan (bukan DRM)
+LICENSE_SECRET_FALLBACK = ""  # TIDAK ADA fallback hardcoded — wajib env MYOFFICE_LICENSE_SECRET (fix audit #3)
 
 
 def _license_secret():
-    return os.environ.get("MYOFFICE_LICENSE_SECRET", "") or LICENSE_SECRET_FALLBACK
+    """Secret lisensi WAJIB dari env — TIDAK ada fallback (fix audit #3: hardcoded secret publik).
+    Kalau env kosong → status unlicensed (fail safe)."""
+    s = os.environ.get("MYOFFICE_LICENSE_SECRET", "").strip()
+    return s or ""  # kosong = license tidak aktif
 
 
 def get_license():
@@ -3841,7 +3848,13 @@ def read_body(handler, max_body=2 * 1024 * 1024):
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        pass  # senyap
+        # structured-ish logging (fix audit #3): timestamp + level + pesan ke stderr
+        try:
+            import datetime
+            ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            sys.stderr.write(f"{ts} | http | {fmt % args if args else fmt}\n")
+        except Exception:
+            pass
 
     def _route(self, method):
         path = self.path.split("?")[0].rstrip("/")
@@ -4444,6 +4457,9 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, 200, {"ok": True, **res})
             # --- multi-user & roles ---
             if path == "/office/auth/login" and method == "POST":
+                # fix audit #3: rate limit login (anti bruteforce) — 10 percobaan/menit per IP
+                if not _rate_limit("login:" + (_client_ip(self.headers, self.client_address) or "?"), limit=10, window=60):
+                    return send_json(self, 429, {"ok": False, "error": "terlalu banyak percobaan login — tunggu 1 menit"})
                 user, err = auth_login(read_body(self))
                 if err:
                     return send_json(self, 401, {"ok": False, "error": err})
