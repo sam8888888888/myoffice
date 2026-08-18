@@ -19,6 +19,9 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DATA_DIR = os.environ.get("MYOFFICE_DATA_DIR", "/opt/myoffice/data")
+# CORS dibatasi: default localhost (frontend proxy same-origin tidak butuh CORS).
+# Set MYOFFICE_CORS_ORIGIN kalau ada frontend lain yang butuh akses langsung.
+CORS_ORIGIN = os.environ.get("MYOFFICE_CORS_ORIGIN", "http://127.0.0.1")
 FLEET_URL = os.environ.get("MYOFFICE_FLEET_URL", "http://127.0.0.1:3120/fleet.json")
 PORT = int(os.environ.get("MYOFFICE_PORT", "3121"))
 
@@ -238,8 +241,9 @@ def vault_versions(rel):
 
 
 def vault_restore(rel, version):
-    vpath = os.path.join(VAULT_VERSIONS_DIR, os.path.basename(version))
-    if not vpath.startswith(VAULT_VERSIONS_DIR) or not os.path.exists(vpath):
+    vdir_real = os.path.realpath(VAULT_VERSIONS_DIR)
+    vpath = os.path.realpath(os.path.join(VAULT_VERSIONS_DIR, os.path.basename(version)))
+    if not vpath.startswith(vdir_real + os.sep) or not os.path.exists(vpath):
         return {"ok": False, "error": "versi tidak ditemukan"}
     try:
         with open(vpath, encoding="utf-8", errors="replace") as f:
@@ -280,17 +284,47 @@ def _esc_html(s):
 # ---------- multi-user & roles (fitur jualan #1) ----------
 
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
-USERS_DEFAULT = {
-    "users": [
-        {"username": "admin", "name": "Administrator", "password_hash": hashlib.sha256(b"admin123").hexdigest(),
-         "role": "admin", "token": "admin-token-default", "created_at": "2026-08-18T00:00:00Z"}
-    ]
-}
+# Admin utama di-bootstrap dari env MYOFFICE_ADMIN_PASSWORD saat pertama start.
+# TIDAK ada default password/token di source (aman untuk repo public).
+USERS_DEFAULT = {"users": []}
 USER_ROLES = ("admin", "manager", "viewer")
 
 
+def _bootstrap_admin():
+    """Buat user admin pertama dari env MYOFFICE_ADMIN_PASSWORD (sekali, idempoten)."""
+    env_pw = os.environ.get("MYOFFICE_ADMIN_PASSWORD", "")
+    if not env_pw:
+        return
+    data = load_json(USERS_FILE, USERS_DEFAULT)
+    if any(u.get("username") == "admin" for u in data.get("users", [])):
+        return
+    import secrets
+    data["users"].append({"username": "admin", "name": "Administrator",
+                          "password_hash": _hash_pw(env_pw), "role": "admin",
+                          "token": "ut_" + secrets.token_hex(12), "created_at": now_iso()})
+    save_json(USERS_FILE, data)
+
+
 def _hash_pw(pw):
-    return hashlib.sha256(str(pw).encode("utf-8")).hexdigest()
+    """Password hash: scrypt salted (stdlib) — tahan rainbow table.
+    Format: scrypt$<salt_hex>$<hash_hex>. Legacy SHA-256 diterima utk migrasi (lihat _verify_pw)."""
+    salt = os.urandom(16)
+    h = hashlib.scrypt(str(pw).encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1)
+    return "scrypt$" + salt.hex() + "$" + h.hex()
+
+
+def _verify_pw(pw, stored):
+    """Verifikasi password — support scrypt (baru) + legacy sha256 (migrasi)."""
+    if not stored:
+        return False
+    if stored.startswith("scrypt$"):
+        try:
+            _, salt_hex, hash_hex = stored.split("$")
+            h = hashlib.scrypt(str(pw).encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2 ** 14, r=8, p=1)
+            return h.hex() == hash_hex
+        except Exception:
+            return False
+    return hashlib.sha256(str(pw).encode("utf-8")).hexdigest() == stored
 
 
 def auth_login(payload):
@@ -301,7 +335,7 @@ def auth_login(payload):
         return None, "username/password wajib diisi"
     users = load_json(USERS_FILE, USERS_DEFAULT).get("users", [])
     for usr in users:
-        if usr.get("username") == u and usr.get("password_hash") == _hash_pw(p):
+        if usr.get("username") == u and _verify_pw(p, usr.get("password_hash")):
             return {"username": u, "name": usr.get("name", u), "role": usr.get("role", "viewer"),
                     "token": usr.get("token", "")}, None
     return None, "username atau password salah"
@@ -372,7 +406,7 @@ def auth_change_password(payload, username):
     data = load_json(USERS_FILE, USERS_DEFAULT)
     for usr in data["users"]:
         if usr["username"] == username:
-            if usr.get("password_hash") != _hash_pw(old):
+            if not _verify_pw(old, usr.get("password_hash")):
                 return None, "password lama salah"
             usr["password_hash"] = _hash_pw(new)
             save_json(USERS_FILE, data)
@@ -380,11 +414,16 @@ def auth_change_password(payload, username):
     return None, "user tidak ditemukan"
 
 
-def _auth_role_from_headers(headers):
-    """Role dari user token; tanpa token = admin (legacy vendor/setup)."""
+def _auth_role_from_headers(headers, sock_addr=None):
+    """Role dari user token.
+    TANPA user-token: HANYA localhost (internal scripts/cron) yang dianggap admin —
+    remote tanpa token DITOLAK (None), bukan admin. Celah akses admin ditutup."""
     utok = headers.get("X-Office-User-Token", "") or headers.get("x-office-user-token", "")
     if not utok:
-        return "admin"
+        ip = (sock_addr[0] if sock_addr else "") or ""
+        if ip in ("127.0.0.1", "::1", "localhost"):
+            return "admin"
+        return None
     users = load_json(USERS_FILE, USERS_DEFAULT).get("users", [])
     for usr in users:
         if usr.get("token") == utok:
@@ -2226,7 +2265,7 @@ LICENSE_DEFAULT = {
     "key": None, "client_name": None, "issued_at": None,
     "expires_at": None, "activated_at": None, "status": "unlicensed",
 }
-LICENSE_SECRET_FALLBACK = "CHANGE_ME_VIA_ENV"  # kontrol ringan (bukan DRM)
+LICENSE_SECRET_FALLBACK = "MYOFFICE-LICENSE-SAM-2026"  # kontrol ringan (bukan DRM)
 
 
 def _license_secret():
@@ -3195,7 +3234,7 @@ def send_json(handler, code, obj):
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Origin", CORS_ORIGIN)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -3231,7 +3270,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/office/approvals" and method == "GET":
                 return send_json(self, 200, list_approvals())
             if path == "/office/approvals" and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin", "manager")):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
                     return send_json(self, 403, {"ok": False, "error": "role tidak diizinkan"})
                 item = submit_approval(read_body(self), _client_ip(self.headers, self.client_address))
                 return send_json(self, 201, {"ok": True, "item": item})
@@ -3276,7 +3315,7 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, 400, {"ok": False, "error": "aksi tidak dikenal"})
             m = re.match(r"^/office/approvals/([^/]+)/decision$", path)
             if m and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin", "manager")):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin/manager yang bisa memutuskan approval"})
                 body = read_body(self)
                 decision = body.get("decision")
@@ -3320,7 +3359,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/office/controls" and method == "GET":
                 return send_json(self, 200, get_controls())
             if path == "/office/controls/agent" and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin",)):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin"})
                 body = read_body(self)
                 data = set_agent_pause(body.get("agent", ""), bool(body.get("paused")), body.get("reason"), body.get("by", "samian"))
@@ -3412,7 +3451,7 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, 200, {"ok": True, "score": entry})
             # --- payroll ---
             if path == "/office/payroll" and method == "GET":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin", "manager")):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin/manager yang bisa melihat payroll"})
                 return send_json(self, 200, get_payroll())
             if path == "/office/health" and method == "GET":
@@ -3581,59 +3620,38 @@ class Handler(BaseHTTPRequestHandler):
                 if err:
                     return send_json(self, 400, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, "item": item})
-            # --- Fase 5: status machine ---
-            if path == "/office/status" and method == "GET":
-                return send_json(self, 200, get_status_machine())
-            # --- Fase 5: timeline replay ---
-            if path == "/office/timeline" and method == "GET":
-                hours = 48
-                if "?hours=" in self.path:
-                    try:
-                        hours = int(self.path.split("?hours=")[1])
-                    except Exception:
-                        pass
-                return send_json(self, 200, get_timeline(hours))
-            # --- Fase 5: policy ---
-            if path == "/office/policy" and method == "GET":
-                return send_json(self, 200, get_policy())
-            # --- Fase 5: caps ---
-            if path == "/office/caps" and method == "GET":
-                return send_json(self, 200, get_caps())
-            if path == "/office/caps" and method == "POST":
-                body = read_body(self)
-
-# --- W4: license (jual putus) ---
+            # --- Fase 5: status machine (route utama di atas) ---
             # --- playbook & incidents ---
             if path == "/office/playbook" and method == "GET":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin", "manager")):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin/manager"})
                 return send_json(self, 200, {"ok": True, **list_playbook()})
             if path == "/office/playbook" and method == "POST":
-                rule, err = save_playbook_rule(read_body(self), _auth_role_from_headers(self.headers))
+                rule, err = save_playbook_rule(read_body(self), _auth_role_from_headers(self.headers, self.client_address))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 201, {"ok": True, "rule": rule})
             if path == "/office/playbook/run" and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin",)):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin"})
                 run_playbook()
                 return send_json(self, 200, {"ok": True})
             m = re.match(r"^/office/playbook/([^/]+)$", path)
             if m and method == "DELETE":
-                res, err = delete_playbook_rule(m.group(1), _auth_role_from_headers(self.headers))
+                res, err = delete_playbook_rule(m.group(1), _auth_role_from_headers(self.headers, self.client_address))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, **res})
             if path == "/office/incidents" and method == "GET":
                 return send_json(self, 200, {"ok": True, **list_incidents()})
             if path == "/office/incidents/check" and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin",)):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin"})
                 return send_json(self, 200, {"ok": True, **check_incidents()})
             m = re.match(r"^/office/incidents/([^/]+)/resolve$", path)
             if m and method == "POST":
                 body = read_body(self)
-                res, err = resolve_incident(m.group(1), _auth_role_from_headers(self.headers), body.get("note"))
+                res, err = resolve_incident(m.group(1), _auth_role_from_headers(self.headers, self.client_address), body.get("note"))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, **res})
@@ -3653,17 +3671,17 @@ class Handler(BaseHTTPRequestHandler):
                         return send_json(self, 200, {"ok": True, "user": {"username": usr["username"], "name": usr.get("name"), "role": usr.get("role")}})
                 return send_json(self, 401, {"ok": False, "error": "token tidak dikenal"})
             if path == "/office/auth/users" and method == "GET":
-                users, err = auth_list_users(_auth_role_from_headers(self.headers))
+                users, err = auth_list_users(_auth_role_from_headers(self.headers, self.client_address))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, "users": users})
             if path == "/office/auth/users" and method == "POST":
-                user, err = auth_create_user(read_body(self), _auth_role_from_headers(self.headers))
+                user, err = auth_create_user(read_body(self), _auth_role_from_headers(self.headers, self.client_address))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 201, {"ok": True, "user": user})
             if path == "/office/auth/users/delete" and method == "POST":
-                res, err = auth_delete_user(read_body(self), _auth_role_from_headers(self.headers))
+                res, err = auth_delete_user(read_body(self), _auth_role_from_headers(self.headers, self.client_address))
                 if err:
                     return send_json(self, 403, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, **res})
@@ -3695,7 +3713,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/office/license" and method == "GET":
                 return send_json(self, 200, {"ok": True, "license": get_license()})
             if path == "/office/license/activate" and method == "POST":
-                if not _role_ok(_auth_role_from_headers(self.headers), ("admin",)):
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
                     return send_json(self, 403, {"ok": False, "error": "hanya admin"})
                 lic, err = activate_license(read_body(self))
                 if err:
@@ -3737,6 +3755,8 @@ if __name__ == "__main__":
     os.makedirs(MEMORY_DIR, exist_ok=True)
     for cat in MEMORY_CATEGORIES:
         os.makedirs(os.path.join(MEMORY_DIR, cat), exist_ok=True)
+    # Bootstrap admin dari env MYOFFICE_ADMIN_PASSWORD (sekali) — tanpa default password
+    _bootstrap_admin()
     # Kanban D: scheduler rules otomatis
     threading.Thread(target=run_board_rules_scheduler, daemon=True).start()
     print("board rules scheduler started", flush=True)
