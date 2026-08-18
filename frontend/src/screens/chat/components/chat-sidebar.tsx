@@ -760,6 +760,8 @@ function ChatSidebarComponent({
   const isUsersActive = pathname === '/users'
   const isPlaybookActive = pathname === '/playbook'
   const isIncidentsActive = pathname === '/incidents'
+  const isInboxActive = pathname === '/inbox'
+  const isParliamentActive = pathname === '/parliament'
   const isControlActive = pathname === '/control'
   const isShiftActive = pathname === '/shift'
   const isStandupActive = pathname === '/standup'
@@ -799,6 +801,7 @@ function ChatSidebarComponent({
       icon: CheckmarkCircle02Icon,
       label: 'Approvals',
       active: isApprovalsActive,
+      badge: pendingApprovalCount > 0 ? pendingApprovalCount : undefined,
     },
     {
       kind: 'link',
@@ -827,6 +830,20 @@ function ChatSidebarComponent({
       icon: Alert02Icon,
       label: 'Incidents',
       active: isIncidentsActive,
+    },
+    {
+      kind: 'link',
+      to: '/inbox',
+      icon: MessageMultiple01Icon,
+      label: 'Inbox',
+      active: isInboxActive,
+    },
+    {
+      kind: 'link',
+      to: '/parliament',
+      icon: DashboardSquare01Icon,
+      label: 'Parliament',
+      active: isParliamentActive,
     },
     {
       kind: 'link',
@@ -867,7 +884,7 @@ function ChatSidebarComponent({
       kind: 'link',
       to: '/payroll',
       icon: CoinsIcon,
-      label: 'Payroll',
+      label: 'Budget',
       active: isPayrollActive,
     },
     {
@@ -916,14 +933,14 @@ function ChatSidebarComponent({
       kind: 'link',
       to: '/board',
       icon: GridViewIcon,
-      label: 'Board',
+      label: 'Kanban',
       active: isBoardActive,
     },
     {
       kind: 'link',
       to: '/hr',
       icon: Alert02Icon,
-      label: 'HR',
+      label: 'Agent Registry',
       active: isHrActive,
     },
     {
@@ -939,7 +956,6 @@ function ChatSidebarComponent({
       icon: MessageMultiple01Icon,
       label: 'Chat',
       active: isChatActive,
-      badge: pendingApprovalCount > 0 ? pendingApprovalCount : undefined,
     },
     {
       kind: 'link',
@@ -972,8 +988,8 @@ function ChatSidebarComponent({
     {
       kind: 'link',
       to: '/conductor',
-      icon: Flag01Icon,
-      label: 'Conductor',
+      icon: ConsoleIcon,
+      label: 'Orchestrator',
       active: isConductorActive,
     },
     {
@@ -1000,8 +1016,8 @@ function ChatSidebarComponent({
     {
       kind: 'link',
       to: '/patterns',
-      icon: BrainIcon,
-      label: 'Patterns',
+      icon: PuzzleIcon,
+      label: 'Corrections',
       active: isPatternsActive,
     },
     {

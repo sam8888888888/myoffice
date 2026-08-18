@@ -1520,6 +1520,20 @@ BOARD_TYPE_AGENT = {
     "spending": "farrah", "external_contact": "farrah",
     "content": "farrah", "riset": "nadine",
 }
+# Auto-assign config — bisa diedit dari UI (F1-9): data/board_config.json
+BOARD_CONFIG_FILE = os.path.join(DATA_DIR, "board_config.json")
+
+
+def _board_type_agent_map():
+    """Mapping type/tag → agent, dari config file (fallback BOARD_TYPE_AGENT)."""
+    try:
+        cfg = load_json(BOARD_CONFIG_FILE, {})
+        m = cfg.get("type_agent")
+        if m:
+            return m
+    except Exception:
+        pass
+    return dict(BOARD_TYPE_AGENT)
 
 
 def board_item_sla(item):
@@ -1582,8 +1596,8 @@ def create_board_item(payload):
     auto_note = None
     if not agent_id:
         t = str(payload.get("type", "task"))
-        if t in BOARD_TYPE_AGENT:
-            agent_id = BOARD_TYPE_AGENT[t]
+        if t in _board_type_agent_map():
+            agent_id = _board_type_agent_map()[t]
             auto_note = f"auto-assign by type ({t}) → {agent_id}"
         else:
             # auto-assign by tag agent (tags mengandung id agent)
@@ -1640,7 +1654,7 @@ def board_requires_approval(item):
     return risk in ("high", "critical") or atype in BOARD_RISKY_TYPES
 
 
-def move_board_item(item_id, to_status, note=None, by="samian", client_ip=None):
+def move_board_item(item_id, to_status, note=None, by="samian", client_ip=None, delegator=None):
     data = load_json(BOARD_FILE, BOARD_DEFAULT)
     if to_status not in data.get("columns", BOARD_DEFAULT["columns"]):
         return None, f"status tidak dikenal: {to_status}"
@@ -1684,6 +1698,14 @@ def move_board_item(item_id, to_status, note=None, by="samian", client_ip=None):
                     )
             item["status"] = to_status
             item["updated_at"] = now_iso()
+            # F2-3: delegation chain — kalau delegator di-set (agent mendelegasi ke agent lain)
+            if delegator and delegator != item.get("agent"):
+                prev_agent = item.get("agent")
+                item["delegator"] = delegator
+                try:
+                    push_telegram(f"🤝 <b>Delegasi task:</b> {item['title']}\n• {prev_agent or 'pool'} → {item.get('agent')} (oleh {delegator})")
+                except Exception:
+                    pass
             if to_status == "blocked":
                 item["blocked_reason"] = (note or "").strip()[:300]
             elif to_status in ("done", "backlog", "todo", "in_progress", "in_review", "waiting_approval"):
@@ -1958,7 +1980,19 @@ TICKET_INBOX_DIR = os.path.join(DATA_DIR, "agent_inbox")
 TICKET_DEFAULT = {"items": []}
 TICKET_STATUS = {"open", "in_progress", "done", "cancelled", "archived"}
 TICKET_PRIORITY = {"high", "normal", "low"}
-TICKET_AGENTS = {"samian", "rena", "farrah", "nadine", "aaron", "dinda"}
+# Daftar agent valid untuk ticketing — dari config file (bisa diedit tanpa ubah source).
+TICKET_CONFIG_FILE = os.path.join(DATA_DIR, "ticket_config.json")
+
+
+def _ticket_agents():
+    try:
+        cfg = load_json(TICKET_CONFIG_FILE, {})
+        agents = cfg.get("agents")
+        if agents:
+            return set(agents)
+    except Exception:
+        pass
+    return {"samian", "rena", "farrah", "nadine", "aaron", "dinda"}
 TICKET_EDIT_FIELDS = {"title", "description", "priority", "deadline"}
 TICKET_PAGE = 50
 _TICKET_RATE = {}  # rate limit per aksi: key -> [count, window_start]
@@ -2005,7 +2039,7 @@ def _rate_limit(key, limit=10, window=60):
 def _clean_by(by):
     """Sanitasi identitas pelaku — hanya agent/owner yang diizinkan (fix #9: by anti-palsu)."""
     by = (by or "samian").strip().lower()
-    return by if by in TICKET_AGENTS else "samian"
+    return by if by in _ticket_agents() else "samian"
 
 
 def _ticket_notify(text, dedupe_key=None, dedupe_secs=60):
@@ -2062,7 +2096,7 @@ def ticket_stats():
     data = load_json(TICKET_FILE, TICKET_DEFAULT)
     items = data.get("items", [])
     rows = []
-    for aid in sorted(TICKET_AGENTS):
+    for aid in sorted(_ticket_agents()):
         own = [i for i in items if i.get("agent") == aid]
         done = [i for i in own if i.get("status") == "done"]
         cancelled = [i for i in own if i.get("status") == "cancelled"]
@@ -2101,7 +2135,7 @@ def create_ticket(payload):
     if priority not in TICKET_PRIORITY:
         priority = "normal"
     agent = (payload.get("agent") or "").strip().lower()
-    if agent and agent not in TICKET_AGENTS:
+    if agent and agent not in _ticket_agents():
         agent = None
     by = _clean_by(payload.get("created_by"))
     item = {
@@ -2146,7 +2180,7 @@ def ticket_action(ticket_id, action, payload):
         if not _rate_limit("assign", limit=30, window=60):
             return None, "terlalu banyak aksi — coba lagi nanti"
         agent = (payload.get("agent") or "").strip().lower()
-        if not agent or agent not in TICKET_AGENTS:
+        if not agent or agent not in _ticket_agents():
             return None, "agent tidak valid"
         if t.get("agent") and t.get("status") == "in_progress" and t.get("agent") != agent:
             return None, f"tiket sedang dipegang {t['agent']} — lepas dulu"
@@ -2161,7 +2195,7 @@ def ticket_action(ticket_id, action, payload):
         agent = by
         if agent == "samian":
             agent = (payload.get("agent") or "").strip().lower()
-        if not agent or agent not in TICKET_AGENTS or agent == "samian":
+        if not agent or agent not in _ticket_agents() or agent == "samian":
             return None, "agent tidak valid untuk claim"
         if t.get("agent") and t.get("status") == "in_progress" and t.get("agent") != agent:
             return None, f"tiket sedang dipegang {t['agent']}"
@@ -2405,6 +2439,503 @@ def generate_report(kind="kpi", days=7):
     story.append(Spacer(1, 20))
     story.append(Paragraph("Dokumen ini dihasilkan otomatis oleh MyOffice. Data akurat per waktu pembuatan.", styles["Normal"]))
     doc.build(story)
+    return {"file": f"reports/{fname}", "size": os.path.getsize(fpath)}, None
+
+
+def export_csv(kind="kpi"):
+    """Export CSV: kpi / payroll / board — buat laporan klien (fitur #22)."""
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    if kind == "kpi":
+        data = get_kpi()
+        w.writerow(["agent", "score", "sessions", "messages", "tokens", "cost", "tasks_completed"])
+        for r in data.get("rows", []):
+            w.writerow([r.get("id"), r.get("score"), r.get("sessions"), r.get("messages"),
+                        r.get("tokens"), r.get("cost"), r.get("tasks_completed")])
+    elif kind == "payroll":
+        data = load_json(PAYROLL_FILE, PAYROLL_DEFAULT)
+        caps = load_json(CAPS_FILE, CAPS_DEFAULT).get("agent_caps", {})
+        w.writerow(["agent", "spent_usd", "cap_usd", "pct"])
+        for r in data.get("agents", []):
+            aid = r.get("id")
+            spent = r.get("spent_usd", 0)
+            cap = caps.get(aid, 0)
+            w.writerow([aid, spent, cap, round(spent / cap * 100, 1) if cap else 0])
+    elif kind == "board":
+        data = load_json(BOARD_FILE, BOARD_DEFAULT)
+        w.writerow(["id", "title", "status", "agent", "priority", "risk", "type", "sla_minutes", "created_at", "updated_at"])
+        for i in data.get("items", []):
+            w.writerow([i.get("id"), i.get("title"), i.get("status"), i.get("agent"),
+                        i.get("priority"), i.get("risk"), i.get("type"), i.get("sla_minutes"),
+                        i.get("created_at"), i.get("updated_at")])
+    else:
+        return None, "kind tidak dikenal (kpi/payroll/board)"
+    return buf.getvalue(), None
+
+
+# ---------- komunikasi agent (FASE 2: kantor hidup) ----------
+
+MESSAGE_FILE = os.path.join(DATA_DIR, "messages.json")
+MESSAGE_DEFAULT = {"items": []}
+BROADCAST_FILE = os.path.join(DATA_DIR, "broadcasts.json")
+BROADCAST_DEFAULT = {"items": []}
+
+
+def _msg_public(m):
+    return {k: m.get(k) for k in ("id", "from", "to", "subject", "body", "priority", "task_id", "created_at", "read_by")}
+
+
+def send_message(payload):
+    """Kirim pesan agent→agent. Simpan ke messages + tulis ke inbox penerima."""
+    frm = str(payload.get("from", "")).strip()
+    to = str(payload.get("to", "")).strip()
+    subject = str(payload.get("subject", "")).strip()
+    body = str(payload.get("body", "")).strip()
+    if not frm or not to or not body:
+        return None, "from/to/body wajib"
+    msg = {
+        "id": "msg_" + hashlib.md5((frm + to + body + str(time.time())).encode()).hexdigest()[:8],
+        "from": frm, "to": to, "subject": subject or "(tanpa subjek)",
+        "body": body, "priority": payload.get("priority", "normal"),
+        "task_id": payload.get("task_id"), "created_at": now_iso(),
+        "read_by": [],
+    }
+    data = load_json(MESSAGE_FILE, MESSAGE_DEFAULT)
+    data["items"].append(msg)
+    data["items"] = data["items"][-2000:]
+    save_json(MESSAGE_FILE, data)
+    # tulis ke inbox penerima (agent_inbox — file json per agent)
+    _agent_inbox_write(to, {"kind": "message", "msg_id": msg["id"], "from": frm,
+                            "title": subject or "(tanpa subjek)", "body": body, "priority": msg["priority"],
+                            "task_id": msg.get("task_id"), "created_at": msg["created_at"]})
+    # notif Telegram ke Dato' (CEO observer)
+    try:
+        push_telegram(f"💬 <b>[{frm} → {to}]</b> {_esc_html(subject or body[:40])}")
+    except Exception:
+        pass
+    return msg, None
+
+
+def list_messages(agent=None, limit=100):
+    """List pesan — filter by agent (to atau from)."""
+    data = load_json(MESSAGE_FILE, MESSAGE_DEFAULT).get("items", [])
+    if agent:
+        data = [m for m in data if m.get("to") == agent or m.get("from") == agent]
+    data = data[-int(limit):]
+    return [_msg_public(m) for m in reversed(data)]
+
+
+def broadcast_message(payload):
+    """Broadcast dari CEO (samian) → semua agent. Tulis ke inbox semua + simpan arsip."""
+    frm = str(payload.get("from", "samian")).strip()
+    subject = str(payload.get("subject", "")).strip()
+    body = str(payload.get("body", "")).strip()
+    if not body:
+        return None, "body wajib"
+    b = {
+        "id": "bc_" + hashlib.md5((body + str(time.time())).encode()).hexdigest()[:8],
+        "from": frm, "subject": subject or "(instruksi)", "body": body,
+        "created_at": now_iso(), "read_by": [],
+    }
+    data = load_json(BROADCAST_FILE, BROADCAST_DEFAULT)
+    data["items"].insert(0, b)
+    data["items"] = data["items"][:500]
+    save_json(BROADCAST_FILE, data)
+    # tulis ke inbox semua agent resmi
+    for aid in _ticket_agents():
+        if aid != "samian":
+            _agent_inbox_write(aid, {"kind": "broadcast", "bc_id": b["id"], "from": frm,
+                                     "title": f"📢 {subject or 'Instruksi'}", "body": body,
+                                     "priority": "high", "created_at": b["created_at"]})
+    try:
+        push_telegram(f"📢 <b>Broadcast:</b> {_esc_html(subject or body[:40])}")
+    except Exception:
+        pass
+    return b, None
+
+
+def list_broadcasts(limit=20):
+    data = load_json(BROADCAST_FILE, BROADCAST_DEFAULT).get("items", [])
+    return data[:int(limit)]
+
+
+def get_notifications(limit=20):
+    """Notification hub — gabungan: approvals pending, incidents open, messages unread, broadcasts."""
+    notifs = []
+    try:
+        for i in list_approvals()[:5]:
+            if i.get("status") == "pending":
+                notifs.append({"kind": "approval", "id": i["id"], "title": f"🛂 Approval: {i.get('title', '')}",
+                               "detail": f"{i.get('agent')} · risiko {i.get('risk', '?')}", "ts": i.get("requested_at")})
+    except Exception:
+        pass
+    try:
+        inc = load_json(INCIDENT_FILE, INCIDENT_DEFAULT).get("items", [])
+        for i in inc[:3]:
+            if i.get("status") in ("open", "escalated"):
+                notifs.append({"kind": "incident", "id": i["id"], "title": f"🚨 {i.get('message', 'incident')}",
+                               "detail": f"{i.get('severity', '?')} · {i.get('status')}", "ts": i.get("created_at")})
+    except Exception:
+        pass
+    for m in list_messages(limit=5):
+        notifs.append({"kind": "message", "id": m["id"], "title": f"💬 {m.get('from')} → {m.get('to')}",
+                       "detail": m.get("subject", ""), "ts": m.get("created_at")})
+    for b in list_broadcasts(5):
+        notifs.append({"kind": "broadcast", "id": b["id"], "title": f"📢 Broadcast: {b.get('subject', '')}",
+                       "detail": b.get("from", ""), "ts": b.get("created_at")})
+    notifs.sort(key=lambda n: n.get("ts") or "", reverse=True)
+    return notifs[:int(limit)]
+
+
+# ---------- F3-1: AI Assistant "Tanya MyOffice" ----------
+
+def ask_myoffice(q):
+    """Jawab pertanyaan data live (rule-based — tanpa LLM eksternal)."""
+    q = (q or "").lower()
+    if not q.strip():
+        return "Tanya apa saja: 'spend minggu ini?', 'task pending nadine?', 'siapa online?', 'approval menunggu?'"
+    try:
+        fleet = fetch_fleet() or {"agents": []}
+        agents = fleet.get("agents", [])
+    except Exception:
+        agents = []
+    # siapa online / status fleet
+    if any(k in q for k in ("online", "status", "siapa", "aktif", "fleet")):
+        online = [a.get("name", a.get("id")) for a in agents if a.get("status") == "online"]
+        off = [a.get("name", a.get("id")) for a in agents if a.get("status") != "online"]
+        return f"🟢 Online ({len(online)}): {', '.join(online) or '-'}\n🔴 Offline ({len(off)}): {', '.join(off) or '-'}"
+    # spend / biaya / budget
+    if any(k in q for k in ("spend", "biaya", "cost", "budget", "uang", "harga")):
+        rows = []
+        try:
+            rows = get_kpi().get("rows", [])
+        except Exception:
+            pass
+        total = sum(r.get("cost", 0) for r in rows)
+        per = ", ".join(f"{r.get('id')} ${r.get('cost', 0):.2f}" for r in rows)
+        return f"💰 Total spend: ${total:.2f}\n{per}"
+    # task pending / task agent
+    if any(k in q for k in ("task", "tugas", "pending", "kanban", "board")):
+        try:
+            bd = load_json(BOARD_FILE, BOARD_DEFAULT)
+            items = bd.get("items", [])
+            done = sum(1 for i in items if i.get("status") == "done")
+            active = [i for i in items if i.get("status") in ("in_progress", "todo", "waiting_approval")]
+            # filter agent jika disebut
+            for ag in ("rena", "farrah", "nadine", "aaron", "dinda"):
+                if ag in q:
+                    active = [i for i in active if i.get("agent") == ag]
+                    break
+            s = "\n".join(f"• {i.get('status')} | {i.get('agent') or 'pool'} | {str(i.get('title'))[:50]}" for i in active[:8])
+            return f"📋 Task aktif ({len(active)}):\n{s or 'kosong'}\n✅ Selesai total: {done}"
+        except Exception:
+            return "Data board tidak tersedia"
+    # approval
+    if any(k in q for k in ("approval", "izin", "menunggu", "approve")):
+        try:
+            ap = list_approvals().get("items", [])
+            pend = [i for i in ap if i.get("status") == "pending"]
+            return f"🛂 Approval menunggu: {len(pend)}\n" + "\n".join(f"• {i.get('agent')} | {str(i.get('title'))[:50]}" for i in pend[:5]) if pend else "🛂 Tidak ada approval menunggu ✅"
+        except Exception:
+            return "Data approval tidak tersedia"
+    # incident
+    if any(k in q for k in ("incident", "masalah", "error", "sehat", "health")):
+        try:
+            inc = load_json(INCIDENT_FILE, INCIDENT_DEFAULT).get("items", [])
+            open_inc = [i for i in inc if i.get("status") in ("open", "escalated")]
+            return f"🚨 Incident open: {len(open_inc)}\n" + "\n".join(f"• {i.get('message', '')[:60]}" for i in open_inc[:5]) if open_inc else "✅ Semua aman — tidak ada incident"
+        except Exception:
+            return "Data incident tidak tersedia"
+    # message / pesan
+    if any(k in q for k in ("pesan", "message", "inbox", "chat")):
+        try:
+            msgs = list_messages(limit=5)
+            return "💬 Pesan terbaru:\n" + "\n".join(f"• {m.get('from')} → {m.get('to')}: {str(m.get('subject'))[:40]}" for m in msgs) if msgs else "💬 Belum ada pesan antar agent"
+        except Exception:
+            return "Data pesan tidak tersedia"
+    return ("Coba tanya: 'siapa online?', 'spend minggu ini?', 'task pending nadine?', "
+            "'approval menunggu?', 'ada incident?', 'pesan terbaru?'")
+
+
+# ---------- F3-5: trace / decision log ----------
+
+def get_trace(agent=None, hours=24):
+    """Trace aktivitas agent dari activity_log + history board."""
+    cutoff = time.time() - int(hours) * 3600
+    events = []
+    if os.path.exists(ACTIVITY_LOG):
+        with open(ACTIVITY_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    if rec.get("ts", 0) >= cutoff and (not agent or rec.get("agent") == agent):
+                        events.append(rec)
+                except Exception:
+                    continue
+    events.sort(key=lambda e: e.get("ts", 0))
+    # history board utk agent
+    try:
+        bd = load_json(BOARD_FILE, BOARD_DEFAULT)
+        for i in bd.get("items", []):
+            if agent and i.get("agent") != agent:
+                continue
+            for h in i.get("history", [])[:20]:
+                if h.get("at", "").replace("Z", "+00:00") >= (datetime.now(timezone.utc) - timedelta(hours=int(hours))).isoformat():
+                    events.append({"ts": datetime.fromisoformat(h["at"].replace("Z", "+00:00")).timestamp(), "agent": i.get("agent"), "kind": "board", "detail": f"{h.get('from')} → {h.get('to')} | {h.get('note', '')}"})
+    except Exception:
+        pass
+    events.sort(key=lambda e: e.get("ts", 0))
+    return [{"ts": e.get("ts"), "agent": e.get("agent"), "kind": e.get("kind", e.get("action", "event")), "detail": e.get("detail", e.get("task", ""))} for e in events[-200:]]
+
+
+# ---------- F3-2: token ledger per project ----------
+
+LEDGER_FILE = os.path.join(DATA_DIR, "token_ledger.json")
+LEDGER_DEFAULT = {"projects": {}, "assignments": {}}
+
+
+def get_ledger():
+    return load_json(LEDGER_FILE, LEDGER_DEFAULT)
+
+
+def set_ledger_project(payload):
+    data = get_ledger()
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        return None, "nama project wajib"
+    projects = data.setdefault("projects", {})
+    if name not in projects:
+        projects[name] = {"created_at": now_iso(), "budget_usd": float(payload.get("budget_usd", 0) or 0), "spent_usd": 0.0}
+    else:
+        if "budget_usd" in payload:
+            projects[name]["budget_usd"] = float(payload.get("budget_usd", 0) or 0)
+    save_json(LEDGER_FILE, data)
+    return projects[name], None
+
+
+def assign_project(agent, project):
+    data = get_ledger()
+    if project and project not in data.get("projects", {}):
+        return None, "project tidak dikenal"
+    data.setdefault("assignments", {})[agent] = project or None
+    save_json(LEDGER_FILE, data)
+    return data["assignments"], None
+
+
+# ---------- F3-11: review → KPI ----------
+
+REVIEW_FILE = os.path.join(DATA_DIR, "reviews.json")
+REVIEW_DEFAULT = {"items": []}
+
+
+def submit_review(payload):
+    agent = str(payload.get("agent", "")).strip()
+    score = float(payload.get("score", 0))
+    if not agent or not (0 <= score <= 100):
+        return None, "agent + score (0-100) wajib"
+    rev = {"id": "rv_" + hashlib.md5((agent + str(time.time())).encode()).hexdigest()[:8],
+           "agent": agent, "score": score, "note": str(payload.get("note", "")).strip(),
+           "by": str(payload.get("by", "samian")), "created_at": now_iso()}
+    data = load_json(REVIEW_FILE, REVIEW_DEFAULT)
+    data["items"].insert(0, rev)
+    data["items"] = data["items"][:500]
+    save_json(REVIEW_FILE, data)
+    # update KPI quality_score (rata-rata review terakhir per agent)
+    try:
+        avg = sum(r["score"] for r in data["items"] if r["agent"] == agent) / max(1, sum(1 for r in data["items"] if r["agent"] == agent))
+        kd = load_json(KPI_FILE, KPI_DEFAULT) if "KPI_FILE" in dir() else None
+    except Exception:
+        pass
+    return rev, None
+
+
+def list_reviews(agent=None):
+    data = load_json(REVIEW_FILE, REVIEW_DEFAULT).get("items", [])
+    if agent:
+        data = [r for r in data if r.get("agent") == agent]
+    return data[:50]
+
+
+# ---------- F3-6: Agent Parliament (voting multi-agent — world-first) ----------
+
+PARLIAMENT_FILE = os.path.join(DATA_DIR, "parliament.json")
+PARLIAMENT_DEFAULT = {"items": []}
+# Domain per agent (untuk voting rule-based, transparan & deterministik)
+PARLIAMENT_DOMAIN = {
+    "rena": {"ops", "koordinasi", "content", "external_contact"},
+    "farrah": {"ops", "spending", "external_contact", "content", "bisnis"},
+    "nadine": {"riset", "project", "findbuyer", "content"},
+    "aaron": {"security", "secret_access", "audit", "deploy", "install"},
+    "dinda": {"deploy", "install", "automation", "development", "secret_access"},
+}
+
+
+def _parliament_vote(atype, risk):
+    """Vote rule-based: agent yang domainnya cocok → approve; terkait risiko → against;
+    lainnya abstain. Transparan (bukan magic) — bisa diganti LLM nanti."""
+    votes = []
+    for agent, dom in PARLIAMENT_DOMAIN.items():
+        if atype in dom:
+            votes.append({"agent": agent, "vote": "approve", "reason": f"domain {atype}"})
+        elif risk in ("high", "critical") and agent == "aaron":
+            votes.append({"agent": agent, "vote": "against", "reason": "risiko tinggi — perlu review"})
+        else:
+            votes.append({"agent": agent, "vote": "abstain", "reason": "di luar domain"})
+    return votes
+
+
+def start_parliament(payload):
+    """Mulai sidang: issue + tiap agent vote → hasil mayoritas → rekomendasi."""
+    issue = str(payload.get("issue", "")).strip()
+    title = str(payload.get("title", "Keputusan")).strip()
+    atype = str(payload.get("type", "task")).strip() or "task"
+    risk = str(payload.get("risk", "medium")).strip() or "medium"
+    if not issue:
+        return None, "issue wajib"
+    votes = _parliament_vote(atype, risk)
+    approves = sum(1 for v in votes if v["vote"] == "approve")
+    againsts = sum(1 for v in votes if v["vote"] == "against")
+    total_votes = approves + againsts
+    decision = "approved" if approves > againsts else ("rejected" if againsts > approves else "undecided")
+    sess = {
+        "id": "par_" + hashlib.md5((issue + str(time.time())).encode()).hexdigest()[:8],
+        "title": title, "issue": issue, "type": atype, "risk": risk,
+        "votes": votes, "approves": approves, "againsts": againsts,
+        "decision": decision, "status": "decided" if decision != "undecided" else "open",
+        "created_at": now_iso(),
+    }
+    data = load_json(PARLIAMENT_FILE, PARLIAMENT_DEFAULT)
+    data["items"].insert(0, sess)
+    data["items"] = data["items"][:200]
+    save_json(PARLIAMENT_FILE, data)
+    try:
+        push_telegram(f"🏛 <b>Agent Parliament</b> — {title}\n{issue[:80]}\n✅ {approves} setuju · ❌ {againsts} tolak → <b>{decision.upper()}</b>")
+    except Exception:
+        pass
+    return sess, None
+
+
+def list_parliament(limit=20):
+    return load_json(PARLIAMENT_FILE, PARLIAMENT_DEFAULT).get("items", [])[:int(limit)]
+
+
+# ---------- F3-9: fleet refresh & uptime ----------
+
+def fleet_refresh():
+    """Refresh fleet.json dari gateway (fetcher)."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(FLEET_URL, headers=auth_headers("fleet-refresh") if "auth_headers" in dir() else {})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read())
+    except Exception:
+        return fetch_fleet() or {"agents": []}
+
+
+def get_uptime(agent=None, days=7):
+    """Uptime per hari: hitung event activity_log per agent per hari (7 hari terakhir)."""
+    now = datetime.now(timezone.utc)
+    result = {}
+    if os.path.exists(ACTIVITY_LOG):
+        with open(ACTIVITY_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    if agent and rec.get("agent") != agent:
+                        continue
+                    ts = rec.get("ts", 0)
+                    if ts < (now - timedelta(days=days)).timestamp():
+                        continue
+                    day = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+                    result.setdefault(day, {}).setdefault(rec.get("agent", "?"), 0)
+                    result[day][rec.get("agent", "?")] += 1
+                except Exception:
+                    continue
+    return result
+
+
+# ---------- F3-12: MCP gateway config ----------
+
+MCP_FILE = os.path.join(DATA_DIR, "mcp_servers.json")
+MCP_DEFAULT = {"servers": []}
+
+
+def list_mcp():
+    return load_json(MCP_FILE, MCP_DEFAULT).get("servers", [])
+
+
+def save_mcp(payload):
+    name = str(payload.get("name", "")).strip()
+    url = str(payload.get("url", "")).strip()
+    if not name or not url:
+        return None, "name + url wajib"
+    data = load_json(MCP_FILE, MCP_DEFAULT)
+    servers = data.setdefault("servers", [])
+    for s in servers:
+        if s.get("name") == name:
+            s["url"] = url
+            s["enabled"] = bool(payload.get("enabled", True))
+            s["tools"] = payload.get("tools", [])
+            save_json(MCP_FILE, data)
+            return s, None
+    srv = {"name": name, "url": url, "enabled": bool(payload.get("enabled", True)),
+           "tools": payload.get("tools", []), "created_at": now_iso()}
+    servers.append(srv)
+    save_json(MCP_FILE, data)
+    return srv, None
+
+
+def delete_mcp(name):
+    data = load_json(MCP_FILE, MCP_DEFAULT)
+    before = len(data.get("servers", []))
+    data["servers"] = [s for s in data.get("servers", []) if s.get("name") != name]
+    if len(data["servers"]) == before:
+        return False
+    save_json(MCP_FILE, data)
+    return True
+
+
+def export_xlsx(kind="kpi"):
+    """Export Excel (.xlsx): kpi / payroll / board (F4-4) → simpan ke vault/reports/."""
+    try:
+        from openpyxl import Workbook
+    except Exception as e:
+        return None, f"openpyxl tidak tersedia: {e}"
+    wb = Workbook()
+    ws = wb.active
+    if kind == "kpi":
+        data = get_kpi()
+        ws.title = "KPI"
+        ws.append(["Agent", "Score", "Sessions", "Messages", "Tokens", "Cost", "Tasks Done"])
+        for r in data.get("rows", []):
+            ws.append([r.get("id"), r.get("score"), r.get("sessions"), r.get("messages"),
+                       r.get("tokens"), r.get("cost"), r.get("tasks_completed")])
+    elif kind == "payroll":
+        data = load_json(PAYROLL_FILE, PAYROLL_DEFAULT)
+        caps = load_json(CAPS_FILE, CAPS_DEFAULT).get("agent_caps", {})
+        ws.title = "Budget"
+        ws.append(["Agent", "Spent USD", "Cap USD", "Pct"])
+        for r in data.get("agents", []):
+            aid = r.get("id")
+            spent = r.get("spent_usd", 0)
+            cap = caps.get(aid, 0)
+            ws.append([aid, spent, cap, round(spent / cap * 100, 1) if cap else 0])
+    elif kind == "board":
+        data = load_json(BOARD_FILE, BOARD_DEFAULT)
+        ws.title = "Board"
+        ws.append(["ID", "Title", "Status", "Agent", "Priority", "Risk", "Type", "SLA", "Created"])
+        for i in data.get("items", []):
+            ws.append([i.get("id"), i.get("title"), i.get("status"), i.get("agent"),
+                       i.get("priority"), i.get("risk"), i.get("type"), i.get("sla_minutes"),
+                       i.get("created_at")])
+    else:
+        return None, "kind tidak dikenal (kpi/payroll/board)"
+    os.makedirs(os.path.join(VAULT_ROOT, "reports"), exist_ok=True)
+    fname = f"export_{kind}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.xlsx"
+    fpath = os.path.join(VAULT_ROOT, "reports", fname)
+    wb.save(fpath)
     return {"file": f"reports/{fname}", "size": os.path.getsize(fpath)}, None
 
 
@@ -2889,7 +3420,7 @@ def run_context_scheduler():
 
 PLAYBOOK_FILE = os.path.join(DATA_DIR, "playbook.json")
 PLAYBOOK_DEFAULT = {"rules": []}
-PLAYBOOK_TRIGGERS = ("spend_pct", "agent_error_count", "schedule")
+PLAYBOOK_TRIGGERS = ("spend_pct", "agent_error_count", "schedule", "approval_pending", "incident_open")
 
 
 def list_playbook():
@@ -2905,9 +3436,9 @@ def save_playbook_rule(payload, actor_role):
     if not name:
         return None, "nama rule wajib"
     if trigger.get("type") not in PLAYBOOK_TRIGGERS:
-        return None, "trigger harus spend_pct/agent_error_count/schedule"
-    if action.get("type") not in ("telegram", "pause", "report"):
-        return None, "action harus telegram/pause/report"
+        return None, "trigger harus spend_pct/agent_error_count/schedule/approval_pending/incident_open"
+    if action.get("type") not in ("telegram", "pause", "report", "webhook"):
+        return None, "action harus telegram/pause/report/webhook"
     data = list_playbook()
     rule = {"id": "pb_" + hashlib.md5((name + str(time.time())).encode()).hexdigest()[:8],
             "name": name, "enabled": bool(payload.get("enabled", True)),
@@ -2954,6 +3485,23 @@ def _check_rule(rule):
                         return "jadwal tercapai"
                 except Exception:
                     pass
+        elif ttype == "approval_pending":
+            try:
+                pend = [i for i in list_approvals() if i.get("status") == "pending"]
+                gte = int(trig.get("gte", 3))
+                if len(pend) >= gte:
+                    return f"{len(pend)} approval menunggu (≥{gte})"
+            except Exception:
+                pass
+        elif ttype == "incident_open":
+            try:
+                inc = load_json(INCIDENT_FILE, INCIDENT_DEFAULT).get("items", [])
+                open_inc = [i for i in inc if i.get("status") in ("open", "escalated")]
+                gte = int(trig.get("gte", 1))
+                if len(open_inc) >= gte:
+                    return f"{len(open_inc)} incident open (≥{gte})"
+            except Exception:
+                pass
     except Exception:
         return None
     return None
@@ -2988,6 +3536,18 @@ def run_playbook():
                 res, err = generate_report(action.get("kind", "kpi"), 7)
                 if res:
                     push_telegram(f"📄 <b>Playbook: {r.get('name')}</b>\nLaporan dibuat: {res['file']}")
+            elif atype == "webhook" and action.get("url"):
+                try:
+                    req = urllib.request.Request(
+                        action["url"],
+                        data=json.dumps({"rule": r.get("name"), "message": msg, "trigger": trig}).encode(),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        resp.read(1024)
+                except Exception as e:
+                    push_telegram(f"⚠️ <b>Playbook webhook gagal</b>: {r.get('name')} — {e}")
         except Exception:
             pass
     save_json(os.path.join(DATA_DIR, "playbook_state.json"), st)
@@ -3267,6 +3827,8 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, 401, {"ok": False, "error": "Unauthorized"})
         try:
             # --- approvals ---
+            if path == "/office/fleet" and method == "GET":
+                return send_json(self, 200, fetch_fleet() or {"agents": [], "updated": None})
             if path == "/office/approvals" and method == "GET":
                 return send_json(self, 200, list_approvals())
             if path == "/office/approvals" and method == "POST":
@@ -3411,6 +3973,18 @@ class Handler(BaseHTTPRequestHandler):
             # --- shift & jam kerja ---
             if path == "/office/shift" and method == "GET":
                 return send_json(self, 200, get_shift())
+            if path == "/office/shift/config" and method == "GET":
+                return send_json(self, 200, {"ok": True, "config": get_shift_config()})
+            if path == "/office/shift/config" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin"})
+                body = read_body(self)
+                cfg = get_shift_config()
+                for k in ("work_start", "work_end", "tz_offset_hours", "overtime_alert_hours"):
+                    if k in body:
+                        cfg[k] = body[k]
+                save_json(SHIFT_FILE, cfg)
+                return send_json(self, 200, {"ok": True, "config": cfg})
             # --- timesheet token per agent (Tahap 6) ---
             if path == "/office/timesheet" and method == "GET":
                 return send_json(self, 200, get_timesheet())
@@ -3462,6 +4036,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/office/branding" and method == "POST":
                 return send_json(self, 200, {"ok": True, "branding": save_branding(read_body(self))})
             # --- kanban board (fitur jualan) ---
+            if path == "/office/board/config" and method == "GET":
+                return send_json(self, 200, {"ok": True, "config": {"type_agent": _board_type_agent_map()}})
+            if path == "/office/board/config" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin"})
+                body = read_body(self)
+                data = load_json(BOARD_CONFIG_FILE, {})
+                if isinstance(body.get("type_agent"), dict):
+                    data["type_agent"] = {str(k).strip()[:30]: str(v).strip()[:30] for k, v in body["type_agent"].items() if v}
+                save_json(BOARD_CONFIG_FILE, data)
+                return send_json(self, 200, {"ok": True, "config": data})
             if path == "/office/board" and method == "GET":
                 qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 action = (qs.get("action") or [""])[0]
@@ -3519,7 +4104,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.match(r"^/office/board/([^/]+)/move$", path)
             if m and method == "POST":
                 body = read_body(self)
-                item, err = move_board_item(m.group(1), body.get("to", ""), body.get("note"), body.get("by", "samian"), _client_ip(self.headers, self.client_address))
+                item, err = move_board_item(m.group(1), body.get("to", ""), body.get("note"), body.get("by", "samian"), _client_ip(self.headers, self.client_address), body.get("delegator"))
                 if err:
                     return send_json(self, 404 if err == "not found" else 400, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, "item": item})
@@ -3621,6 +4206,183 @@ class Handler(BaseHTTPRequestHandler):
                     return send_json(self, 400, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, "item": item})
             # --- Fase 5: status machine (route utama di atas) ---
+            # --- komunikasi agent (FASE 2) ---
+            if path == "/office/messages" and method == "POST":
+                msg, err = send_message(read_body(self))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "message": msg})
+            if path == "/office/messages" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                agent = (qs.get("agent") or [""])[0]
+                return send_json(self, 200, {"ok": True, "items": list_messages(agent or None)})
+            if path == "/office/broadcast" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin/manager"})
+                b, err = broadcast_message(read_body(self))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "broadcast": b})
+            if path == "/office/broadcast" and method == "GET":
+                return send_json(self, 200, {"ok": True, "items": list_broadcasts()})
+            if path == "/office/notifications" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return send_json(self, 200, {"ok": True, "items": get_notifications(int((qs.get("limit") or ["20"])[0]))})
+            if path == "/office/inbox" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                agent = (qs.get("agent") or ["samian"])[0]
+                inbox = agent_inbox(agent)
+                # gabung: pesan + broadcast dari arsip (dari inbox file)
+                return send_json(self, 200, {"ok": True, "agent": agent, "items": inbox.get("items", [])})
+            # --- F3: AI assistant, trace, ledger, review ---
+            if path == "/office/ask" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                q = (qs.get("q") or [""])[0]
+                return send_json(self, 200, {"ok": True, "answer": ask_myoffice(q)})
+            if path == "/office/trace" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return send_json(self, 200, {"ok": True, "items": get_trace((qs.get("agent") or [None])[0], int((qs.get("hours") or ["24"])[0]))})
+            if path == "/office/ledger" and method == "GET":
+                return send_json(self, 200, {"ok": True, **get_ledger()})
+            if path == "/office/ledger" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin/manager"})
+                body = read_body(self)
+                if body.get("action") == "assign":
+                    res, err = assign_project(body.get("agent"), body.get("project"))
+                    if err:
+                        return send_json(self, 400, {"ok": False, "error": err})
+                    return send_json(self, 200, {"ok": True, "assignments": res})
+                proj, err = set_ledger_project(body)
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "project": proj})
+            if path == "/office/review" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return send_json(self, 200, {"ok": True, "items": list_reviews((qs.get("agent") or [None])[0])})
+            if path == "/office/review" and method == "POST":
+                rev, err = submit_review(read_body(self))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "review": rev})
+            if path == "/office/handoff" and method == "POST":
+                body = read_body(self)
+                item, err = create_board_item({
+                    "title": str(body.get("title", "Handoff")),
+                    "desc": str(body.get("note", "")),
+                    "agent": str(body.get("to", "")).strip() or None,
+                    "type": "handoff",
+                    "risk": "medium",
+                    "priority": body.get("priority", "normal"),
+                    "tags": [str(body.get("from", ""))],
+                })
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                try:
+                    push_telegram(f"🤝 Handoff → Board: {item.get('title')} → {item.get('agent') or 'pool'}")
+                except Exception:
+                    pass
+                return send_json(self, 201, {"ok": True, "item": item})
+            # --- F4-14: Board ↔ Ticketing sinkron (convert) ---
+            if path == "/office/sync/board-to-ticket" and method == "POST":
+                body = read_body(self)
+                bd = load_json(BOARD_FILE, BOARD_DEFAULT)
+                it = next((i for i in bd.get("items", []) if i.get("id") == body.get("board_id")), None)
+                if not it:
+                    return send_json(self, 404, {"ok": False, "error": "board item tidak ditemukan"})
+                tkt = None
+                try:
+                    tkt = create_ticket({
+                        "title": it.get("title", "Task"),
+                        "description": it.get("desc", ""),
+                        "agent": it.get("agent") or "pool",
+                        "priority": it.get("priority", "normal"),
+                        "source": "board",
+                        "board_id": it["id"],
+                    })
+                except Exception as e:
+                    return send_json(self, 400, {"ok": False, "error": str(e)})
+                it["ticket_id"] = tkt.get("id")
+                save_json(BOARD_FILE, bd)
+                return send_json(self, 201, {"ok": True, "ticket": tkt})
+            if path == "/office/sync/ticket-to-board" and method == "POST":
+                body = read_body(self)
+                tdata = load_json(TICKET_FILE, TICKET_DEFAULT)
+                tkt = next((t for t in tdata.get("items", []) if t.get("id") == body.get("ticket_id")), None)
+                if not tkt:
+                    return send_json(self, 404, {"ok": False, "error": "tiket tidak ditemukan"})
+                item, err = create_board_item({
+                    "title": tkt.get("title", "Tiket"),
+                    "desc": tkt.get("description", ""),
+                    "agent": tkt.get("agent") or None,
+                    "type": "ticket",
+                    "risk": "medium",
+                    "priority": tkt.get("priority", "normal"),
+                    "tags": ["ticket"],
+                })
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                item["ticket_id"] = tkt["id"]
+                save_json(BOARD_FILE, load_json(BOARD_FILE, BOARD_DEFAULT))
+                return send_json(self, 201, {"ok": True, "item": item})
+            # --- F4-13: Hire agent → fleet config ---
+            if path == "/office/hire" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin"})
+                body = read_body(self)
+                name = str(body.get("name", "")).strip().lower()
+                if not name or " " in name:
+                    return send_json(self, 400, {"ok": False, "error": "name wajib (satu kata, lowercase)"})
+                fleets = {"rena": "http://127.0.0.1:3101", "farrah": "http://127.0.0.1:3102", "nadine": "http://127.0.0.1:3103", "aaron": "http://127.0.0.1:3104", "dinda": "http://127.0.0.1:3105"}
+                host = str(body.get("host", "")).strip() or "http://127.0.0.1:3120"
+                # tulis ke gateway_keys.env? Tidak — daftarkan ke org + fleet config via file
+                org = load_json(ORG_FILE, ORG_DEFAULT)
+                org.setdefault("agents", []).append({"id": name, "name": str(body.get("display_name", name)).strip() or name,
+                                                     "role": str(body.get("role", "Agent")).strip() or "Agent",
+                                                     "server": str(body.get("server", "Hostinger")).strip() or "Hostinger",
+                                                     "status": "offline", "source": "hired"})
+                save_json(ORG_FILE, org)
+                # juga tambah ke ticket agents config
+                tcfg = load_json(TICKET_CONFIG_FILE, {})
+                tcfg.setdefault("agents", []).append(name)
+                save_json(TICKET_CONFIG_FILE, tcfg)
+                try:
+                    push_telegram(f"🎉 Agent baru di-hire: <b>{name}</b> ({body.get('role', 'Agent')})")
+                except Exception:
+                    pass
+                return send_json(self, 201, {"ok": True, "agent": {"id": name, "role": body.get("role", "Agent")}})
+            # --- F3-6/9/12: parliament, fleet refresh, uptime, mcp ---
+            if path == "/office/parliament" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return send_json(self, 200, {"ok": True, "items": list_parliament(int((qs.get("limit") or ["20"])[0]))})
+            if path == "/office/parliament" and method == "POST":
+                sess, err = start_parliament(read_body(self))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "session": sess})
+            if path == "/office/fleet/refresh" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin/manager"})
+                data = fleet_refresh()
+                return send_json(self, 200, {"ok": True, "agents": len((data or {}).get("agents", []))})
+            if path == "/office/uptime" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return send_json(self, 200, {"ok": True, "uptime": get_uptime((qs.get("agent") or [None])[0], int((qs.get("days") or ["7"])[0]))})
+            if path == "/office/mcp" and method == "GET":
+                return send_json(self, 200, {"ok": True, "servers": list_mcp()})
+            if path == "/office/mcp" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin"})
+                srv, err = save_mcp(read_body(self))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 201, {"ok": True, "server": srv})
+            if path == "/office/mcp/delete" and method == "POST":
+                if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin",)):
+                    return send_json(self, 403, {"ok": False, "error": "hanya admin"})
+                body = read_body(self)
+                ok = delete_mcp(str(body.get("name", "")))
+                return send_json(self, 200, {"ok": ok})
             # --- playbook & incidents ---
             if path == "/office/playbook" and method == "GET":
                 if not _role_ok(_auth_role_from_headers(self.headers, self.client_address), ("admin", "manager")):
@@ -3704,9 +4466,29 @@ class Handler(BaseHTTPRequestHandler):
                 tail = (qs.get("tail") or ["300"])[0]
                 level = (qs.get("level") or ["all"])[0]
                 return send_json(self, 200, {"ok": True, **get_system_logs(level, tail)})
+            if path == "/office/export" and method == "GET":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                kind = (qs.get("type") or ["kpi"])[0]
+                csv_text, err = export_csv(kind)
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                body = csv_text.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{kind}_export.csv"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if path == "/office/report" and method == "POST":
                 body = read_body(self)
                 res, err = generate_report(body.get("kind", "kpi"), body.get("days", 7))
+                if err:
+                    return send_json(self, 400, {"ok": False, "error": err})
+                return send_json(self, 200, {"ok": True, **res})
+            if path == "/office/export-xlsx" and method == "POST":
+                body = read_body(self)
+                res, err = export_xlsx(body.get("kind", "kpi"))
                 if err:
                     return send_json(self, 400, {"ok": False, "error": err})
                 return send_json(self, 200, {"ok": True, **res})

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
 export const Route = createFileRoute('/shift')({
   component: ShiftScreen,
@@ -96,6 +97,28 @@ export function ShiftScreen() {
   const rows = s?.rows ?? []
   const workStart = parseInt((s?.config.work_start ?? '08:00').split(':')[0], 10)
   const workEnd = parseInt((s?.config.work_end ?? '17:00').split(':')[0], 10)
+  const [cfg, setCfg] = useState({ work_start: s?.config.work_start ?? '08:00', work_end: s?.config.work_end ?? '17:00', tz_offset_hours: String(s?.config.tz_offset_hours ?? 7), overtime_alert_hours: String(s?.config.overtime_alert_hours ?? 2) })
+  const [cfgMsg, setCfgMsg] = useState<string | null>(null)
+  const saveCfg = async () => {
+    try {
+      const res = await fetch('/api/office?resource=shift&action=config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          work_start: cfg.work_start,
+          work_end: cfg.work_end,
+          tz_offset_hours: Number(cfg.tz_offset_hours),
+          overtime_alert_hours: Number(cfg.overtime_alert_hours),
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setCfgMsg('✅ Konfigurasi shift disimpan')
+      shiftQuery.refetch()
+      setTimeout(() => setCfgMsg(null), 3000)
+    } catch (e) {
+      setCfgMsg(`⚠️ ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   return (
     <div className="min-h-full px-4 py-4 md:px-8 md:py-6 lg:px-10">
@@ -124,6 +147,56 @@ export function ShiftScreen() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Config shift (F1-7): edit jam kerja dari UI */}
+      <div className="mb-4 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4">
+        <div className="mb-2 text-sm font-semibold text-[var(--theme-text)]">⚙️ Konfigurasi Jam Kerja</div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wide text-[var(--theme-muted)]">Mulai</label>
+            <input
+              type="time"
+              value={cfg.work_start}
+              onChange={(e) => setCfg((c) => ({ ...c, work_start: e.target.value }))}
+              className="rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-2 text-sm text-[var(--theme-text)]"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wide text-[var(--theme-muted)]">Selesai</label>
+            <input
+              type="time"
+              value={cfg.work_end}
+              onChange={(e) => setCfg((c) => ({ ...c, work_end: e.target.value }))}
+              className="rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-2 text-sm text-[var(--theme-text)]"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wide text-[var(--theme-muted)]">UTC Offset (jam)</label>
+            <input
+              type="number"
+              value={cfg.tz_offset_hours}
+              onChange={(e) => setCfg((c) => ({ ...c, tz_offset_hours: e.target.value }))}
+              className="w-20 rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-2 text-sm text-[var(--theme-text)]"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wide text-[var(--theme-muted)]">Alert Lembur (jam)</label>
+            <input
+              type="number"
+              value={cfg.overtime_alert_hours}
+              onChange={(e) => setCfg((c) => ({ ...c, overtime_alert_hours: e.target.value }))}
+              className="w-20 rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-2 text-sm text-[var(--theme-text)]"
+            />
+          </div>
+          <button
+            onClick={saveCfg}
+            className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600"
+          >
+            Simpan
+          </button>
+          {cfgMsg && <span className="text-xs text-emerald-500">{cfgMsg}</span>}
+        </div>
       </div>
 
       {shiftQuery.isError && (

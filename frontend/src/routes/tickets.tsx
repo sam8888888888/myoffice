@@ -407,6 +407,7 @@ function TicketsScreen() {
     open: tickets.filter((t) => t.status === 'open').length,
     in_progress: tickets.filter((t) => t.status === 'in_progress').length,
     done: tickets.filter((t) => t.status === 'done').length,
+    archived: ticketsData?.total_archived ?? tickets.filter((t) => t.status === 'archived').length,
   }
   const statsRows = statsQuery.data ?? []
 
@@ -495,7 +496,7 @@ function TicketsScreen() {
           placeholder="🔍 Cari tiket…"
           className="w-full max-w-xs rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-text)] outline-none focus:border-sky-500"
         />
-        {(['all', 'open', 'in_progress', 'done', 'cancelled'] as const).map((s) => (
+        {(['all', 'open', 'in_progress', 'done', 'cancelled', 'archived'] as const).map((s) => (
           <button
             key={s}
             onClick={() => setFilter(s)}
@@ -503,7 +504,7 @@ function TicketsScreen() {
               filter === s ? 'bg-[var(--theme-accent)] text-white' : 'bg-[var(--theme-card2)] text-[var(--theme-muted)] hover:bg-[var(--theme-hover)]'
             }`}
           >
-            {s === 'all' ? `Semua (${totalTickets})` : `${STATUS_LABEL[s].split(' ')[1] ?? s} (${counts[s as keyof typeof counts] ?? 0})`}
+            {s === 'all' ? `Semua (${totalTickets})` : `${STATUS_LABEL[s]?.split(' ')[1] ?? s} (${counts[s as keyof typeof counts] ?? 0})`}
           </button>
         ))}
       </div>

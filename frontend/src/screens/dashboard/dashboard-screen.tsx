@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { MissionControl } from '@/components/mission-control'
+import { AskMyOffice } from '@/components/ask-myoffice'
 import { useNavigate } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useBrand } from '@/hooks/use-brand'
 import {
   Area,
@@ -586,6 +588,7 @@ function SessionRow({
 
 export function DashboardScreen() {
   const navigate = useNavigate()
+  const [askOpen, setAskOpen] = useState(false)
   const { data: brand } = useBrand()
   const brandName = brand?.name || 'MyOffice'
   const brandLogo = brand?.logo || '/favicon.svg'
@@ -656,6 +659,9 @@ export function DashboardScreen() {
 
   return (
     <div className="min-h-full px-4 py-4 md:px-8 md:py-6 lg:px-10 space-y-5 pb-28">
+      {/* ── Mission Control (F1-3): ringkasan tim ── */}
+      <MissionControl />
+      <AskMyOffice open={askOpen} onClose={() => setAskOpen(false)} />
       {/* ── Header: Hermes Logo + Quick Actions ── */}
       <div className="flex flex-col items-center gap-3 py-3">
         <img
@@ -683,6 +689,12 @@ export function DashboardScreen() {
             icon="💻"
             accentColor="#22c55e"
             onClick={() => navigate({ to: '/terminal' })}
+          />
+          <QuickAction
+            label="Tanya AI"
+            icon="🤖"
+            accentColor="#a855f7"
+            onClick={() => setAskOpen(true)}
           />
           <QuickAction
             label="Skills"

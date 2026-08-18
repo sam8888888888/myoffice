@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
 export const Route = createFileRoute('/fleet')({
   component: FleetScreen,
@@ -65,9 +66,13 @@ function StateBadge({ state }: { state: string }) {
   )
 }
 
-function AgentCard({ a, state }: { a: Agent; state?: string }) {
+function AgentCard({ a, state, onClick }: { a: Agent; state?: string; onClick?: () => void }) {
   return (
-    <div className="flex flex-col rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4 shadow-sm">
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-col rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-4 text-left shadow-sm transition hover:border-sky-500/50 hover:bg-[var(--theme-card)]/80"
+    >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-lg font-bold text-primary-700">
@@ -100,7 +105,7 @@ function AgentCard({ a, state }: { a: Agent; state?: string }) {
       <div className="mt-3 border-t border-[var(--theme-border-subtle)] pt-2 text-xs text-[var(--theme-muted)]">
         Cost (est): <span className="font-medium">~${a.cost.toFixed(2)}</span>
       </div>
-    </div>
+    </button>
   )
 }
 
@@ -127,6 +132,7 @@ function FleetScreen() {
   })
 
   const agents = fleetQuery.data ?? []
+  const [selected, setSelected] = useState<Agent | null>(null)
 
   const statusQuery = useQuery({
     queryKey: ['office-status'],
@@ -143,6 +149,16 @@ function FleetScreen() {
   const online = agents.filter((a) => a.status === 'online').length
   const totalTokens = agents.reduce((s, a) => s + a.tokens, 0)
   const totalCost = agents.reduce((s, a) => s + a.cost, 0)
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshFleet = async () => {
+    setRefreshing(true)
+    try {
+      await fetch('/api/office?resource=fleet&action=refresh', { method: 'POST' })
+      fleetQuery.refetch()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   return (
     <div className="min-h-full px-4 py-4 md:px-8 md:py-6 lg:px-10">
@@ -161,6 +177,13 @@ function FleetScreen() {
           <span className="rounded-full bg-[var(--theme-card2)] px-3 py-1 font-medium text-[var(--theme-text-muted)]">
             ~${totalCost.toFixed(2)}
           </span>
+          <button
+            onClick={refreshFleet}
+            disabled={refreshing}
+            className="rounded-full border border-[var(--theme-border)] px-3 py-1 font-medium text-[var(--theme-muted)] hover:text-[var(--theme-text)] disabled:opacity-50"
+          >
+            {refreshing ? '⏳ Refreshing…' : '🔄 Refresh'}
+          </button>
         </div>
       </div>
       {fleetQuery.isError && (
@@ -170,9 +193,50 @@ function FleetScreen() {
       )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {agents.map((a) => (
-          <AgentCard key={a.id} a={a} state={stateMap.get(a.id)} />
+          <AgentCard key={a.id} a={a} state={stateMap.get(a.id)} onClick={() => setSelected(a)} />
         ))}
       </div>
+
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelected(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-xl font-bold text-primary-700">
+                  {selected.name.charAt(0)}
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-[var(--theme-text)]">{selected.name}</div>
+                  <div className="text-xs text-[var(--theme-muted)]">{selected.role}</div>
+                </div>
+              </div>
+              <button onClick={() => setSelected(null)} className="rounded-lg p-1 text-[var(--theme-muted)] hover:bg-[var(--theme-card2)]">✕</button>
+            </div>
+
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Status</span><StatusBadge status={selected.status} /></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Server</span><span className="text-[var(--theme-text)]">{selected.server}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Model</span><span className="text-[var(--theme-text)]">{selected.model ?? '—'}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Version</span><span className="text-[var(--theme-text)]">{selected.version ?? '—'}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Sessions</span><span className="text-[var(--theme-text)]">{formatNum(selected.sessions)}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Messages</span><span className="text-[var(--theme-text)]">{formatNum(selected.messages)}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Tokens</span><span className="text-[var(--theme-text)]">{formatNum(selected.tokens)}</span></div>
+              <div className="flex justify-between"><span className="text-[var(--theme-muted)]">Cost (est)</span><span className="text-[var(--theme-text)]">~${selected.cost.toFixed(2)}</span></div>
+            </div>
+
+            <div className="mt-4 rounded-lg bg-[var(--theme-card2)] px-3 py-2 text-sm text-[var(--theme-text)]">
+              {selected.currentTask ? `🔧 ${selected.currentTask}` : '🟢 Idle'}
+            </div>
+
+            <a
+              href={`/chat/new?prompt=Halo ${selected.name}, mulai sesi kerja hari ini.`}
+              className="mt-4 block w-full rounded-lg bg-accent-500 py-2.5 text-center text-sm font-semibold text-white hover:bg-accent-600"
+            >
+              💬 Chat Langsung
+            </a>
+          </div>
+        </div>
+      )}
       {agents.length === 0 && !fleetQuery.isError && (
         <div className="py-10 text-center text-[var(--theme-muted)]">Memuat fleet…</div>
       )}

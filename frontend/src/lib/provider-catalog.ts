@@ -87,7 +87,28 @@ export const PROVIDER_CATALOG: Array<ProviderInfo> = [
           profiles: {
             'openrouter:default': {
               provider: 'openrouter',
-              apiKey: 'sk-your-key-here',
+              apiKey: 'sk-your-key-here'
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    description: 'DeepSeek models — V4 Flash, V3, R1 (reasoning). Harga sangat hemat.',
+    authTypes: ['api-key'],
+    docsUrl: 'https://platform.deepseek.com/api_keys',
+    configExample: JSON.stringify(
+      {
+        auth: {
+          profiles: {
+            'deepseek:default': {
+              provider: 'deepseek',
+              apiKey: 'sk-your-key-here'
             },
           },
         },

@@ -88,6 +88,8 @@ function fmtTime(iso: string | null): string {
 function ApprovalsScreen() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<'pending' | 'all'>('pending')
+  const [fAgent, setFAgent] = useState('')
+  const [fRisk, setFRisk] = useState('')
   const { data: agents } = useAgents()
   const agentIds = (agents ?? []).map((a) => a.id)
 
@@ -140,7 +142,10 @@ function ApprovalsScreen() {
   })
 
   const items = approvalsQuery.data ?? []
-  const shown = tab === 'pending' ? items.filter((i) => i.status === 'pending') : items
+  const shownBase = tab === 'pending' ? items.filter((i) => i.status === 'pending') : items
+  const shown = shownBase.filter(
+    (i) => (!fAgent || i.agent === fAgent) && (!fRisk || i.risk === fRisk),
+  )
   const pendingCount = items.filter((i) => i.status === 'pending').length
 
   return (
@@ -167,9 +172,30 @@ function ApprovalsScreen() {
                 tab === 'all' ? 'bg-neutral-900 text-white' : 'text-[var(--theme-text-muted)] hover:bg-[var(--theme-card2)]'
               }`}
             >
-              Semua
+              Semua ({items.length})
             </button>
           </div>
+          <select
+            value={fAgent}
+            onChange={(e) => setFAgent(e.target.value)}
+            className="rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-text)]"
+          >
+            <option value="">Semua Agent</option>
+            {agentIds.map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+          <select
+            value={fRisk}
+            onChange={(e) => setFRisk(e.target.value)}
+            className="rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-3 py-1.5 text-sm text-[var(--theme-text)]"
+          >
+            <option value="">Semua Risiko</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
         </div>
       </div>
 

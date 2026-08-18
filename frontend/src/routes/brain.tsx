@@ -244,7 +244,23 @@ function MemoryScreen() {
                 <option key={a} value={a}>{a}</option>
               ))}
             </select>
-            <span className="ml-auto text-xs text-[var(--theme-muted)]">yang akan dibaca agent di awal sesi</span>
+            <span className="ml-auto flex items-center gap-2 text-xs text-[var(--theme-muted)]">
+              yang akan dibaca agent di awal sesi
+              <button
+                onClick={() => {
+                  const txt = (contextQuery.data ?? []).map((b) => `### ${b.id}\n${b.content}`).join('\n\n')
+                  navigator.clipboard?.writeText(txt).then(() => {
+                    const el = document.getElementById('ctx-copied')
+                    if (el) { el.textContent = '✅ Disalin — tempel di chat!'; setTimeout(() => { el.textContent = '' }, 2500) }
+                  })
+                }}
+                className="rounded-lg border border-[var(--theme-border)] px-2 py-1 text-xs text-[var(--theme-muted)] hover:text-[var(--theme-text)]"
+                title="Salin context agent untuk di-paste ke chat (F2-8)"
+              >
+                📋 Salin Konteks
+              </button>
+              <span id="ctx-copied" className="text-emerald-500"></span>
+            </span>
           </div>
           <div className="space-y-2">
             {contextQuery.data?.map((b) => (
@@ -285,6 +301,30 @@ function MemoryScreen() {
               title="Auto: refresh context + ringkasan harian + dreaming (Memory B/C)"
             >
               🔄 Auto
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  await fetch('/api/office?resource=memory&action=dreaming', { method: 'POST' })
+                  qc.invalidateQueries({ queryKey: ['memory'] })
+                })()
+              }}
+              className="rounded-lg border border-[var(--theme-border)] px-3 py-2 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]"
+              title="Dreaming: konsolidasi memory harian (Memory C)"
+            >
+              🌙 Dreaming
+            </button>
+            <button
+              onClick={() => {
+                void (async () => {
+                  await fetch('/api/office?resource=memory&action=daily', { method: 'POST' })
+                  qc.invalidateQueries({ queryKey: ['memory'] })
+                })()
+              }}
+              className="rounded-lg border border-[var(--theme-border)] px-3 py-2 text-sm text-[var(--theme-muted)] hover:text-[var(--theme-text)]"
+              title="Ringkasan harian per agent (Memory B)"
+            >
+              📅 Daily
             </button>
             <button
               onClick={() => setShowAudit((v) => !v)}

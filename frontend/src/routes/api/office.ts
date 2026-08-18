@@ -29,8 +29,16 @@ export const Route = createFileRoute('/api/office')({
           const url = new URL(request.url)
           const resource = url.searchParams.get('resource') ?? 'approvals'
           const action = url.searchParams.get('action')
+          if (resource === 'notifications' || resource === 'inbox' || resource === 'messages' || resource === 'broadcast' || resource === 'parliament' || resource === 'mcp' || resource === 'uptime') {
+            const data = await proxy(`${BASE}/office/${resource}`)
+            return json({ ok: true, ...data })
+          }
           if (resource === 'auth' && action === 'me') {
             const data = await proxy(`${BASE}/office/auth/me`)
+            return json({ ok: true, ...data })
+          }
+          if (resource === 'board' && action === 'config') {
+            const data = await proxy(`${BASE}/office/board/config`)
             return json({ ok: true, ...data })
           }
           if (resource === 'auth' && action === 'users') {
@@ -106,6 +114,20 @@ export const Route = createFileRoute('/api/office')({
             target = `${BASE}/office/board/templates`
           } else if (resource === 'board') {
             target = `${BASE}/office/board`
+          } else if (resource === 'messages') {
+            target = `${BASE}/office/messages`
+          } else if (resource === 'broadcast') {
+            target = `${BASE}/office/broadcast`
+          } else if (resource === 'parliament') {
+            target = `${BASE}/office/parliament`
+          } else if (resource === 'mcp') {
+            target = `${BASE}/office/mcp`
+          } else if (resource === 'fleet' && action === 'refresh') {
+            target = `${BASE}/office/fleet/refresh`
+          } else if (resource === 'shift' && action === 'config') {
+            target = `${BASE}/office/shift/config`
+          } else if (resource === 'board' && action === 'config') {
+            target = `${BASE}/office/board/config`
           } else if (resource === 'playbook' && action === 'delete' && body.id) {
             target = `${BASE}/office/playbook/${body.id}`
           } else if (resource === 'playbook') {

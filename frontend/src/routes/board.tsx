@@ -74,6 +74,7 @@ function BoardScreen() {
   const [showForm, setShowForm] = useState(false)
   const [showRules, setShowRules] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
+  const [dragCol, setDragCol] = useState<string | null>(null)
 
   const boardQuery = useQuery({
     queryKey: ['board'],
@@ -390,7 +391,18 @@ function BoardScreen() {
         {columns.map((col) => {
           const colItems = items.filter((i) => i.status === col)
           return (
-            <div key={col} className="rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)]/60 p-2">
+            <div
+              key={col}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault()
+                const id = e.dataTransfer.getData('text/plain')
+                if (id && id !== col) move.mutate({ id, status: col })
+              }}
+              className={`rounded-xl border p-2 ${
+                col === dragCol ? 'border-dashed border-sky-400 bg-sky-500/5' : 'border-[var(--theme-border)] bg-[var(--theme-card)]/60'
+              }`}
+            >
               <div className="flex items-center justify-between px-2 py-1.5">
                 <span className="text-xs font-bold uppercase tracking-wide text-[var(--theme-muted)]">
                   {STATUS_LABEL[col] ?? col}
@@ -401,7 +413,16 @@ function BoardScreen() {
               </div>
               <div className="max-h-[560px] space-y-2 overflow-y-auto p-1">
                 {colItems.map((item) => (
-                  <div key={item.id} className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card)] p-3">
+                  <div
+                    key={item.id}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', item.id)
+                      setDragCol(col)
+                    }}
+                    onDragEnd={() => setDragCol(null)}
+                    className="cursor-grab rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card)] p-3 active:cursor-grabbing"
+                  >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${PRIORITY_COLOR[item.priority] ?? PRIORITY_COLOR.medium}`}>
                         {item.priority}
@@ -420,7 +441,14 @@ function BoardScreen() {
                         <span className="rounded-full bg-neutral-500/20 px-2 py-0.5 text-[10px] font-semibold text-neutral-400">pool</span>
                       )}
                       {item.status === 'waiting_approval' && (
-                        <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">🛂 Approval</span>
+                        <a
+                          href="/approvals"
+                          onClick={(e) => e.stopPropagation()}
+                          className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-500/30"
+                          title="Lihat approval queue"
+                        >
+                          🛂 Approval →
+                        </a>
                       )}
                       {item.sla_status === 'expired' && (
                         <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">SLA ⚠</span>

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 
 export const Route = createFileRoute('/payroll')({
   component: PayrollScreen,
@@ -43,6 +44,28 @@ function ProgressBar({ pct, status }: { pct: number; status: string }) {
 }
 
 function PayrollScreen() {
+  const qc = useQueryClient()
+  const [editCap, setEditCap] = useState<string | null>(null)
+  const [capVal, setCapVal] = useState('')
+  const [capMsg, setCapMsg] = useState<string | null>(null)
+
+  const saveCap = async (agent: string) => {
+    try {
+      const res = await fetch('/api/office?resource=caps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_caps: { [agent]: Number(capVal) } }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setCapMsg(`✅ Cap ${agent} → $${capVal}/bulan`)
+      setEditCap(null)
+      qc.invalidateQueries({ queryKey: ['payroll'] })
+      setTimeout(() => setCapMsg(null), 3000)
+    } catch (e) {
+      setCapMsg(`⚠️ ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   const payrollQuery = useQuery({
     queryKey: ['payroll'],
     queryFn: async () => {
@@ -90,6 +113,8 @@ function PayrollScreen() {
         )}
       </div>
 
+      {capMsg && <div className="mb-3 text-sm text-emerald-500">{capMsg}</div>}
+
       {payrollQuery.isError && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Gagal memuat payroll: {String(payrollQuery.error)}
@@ -107,6 +132,7 @@ function PayrollScreen() {
                 <th className="px-3 py-3 w-1/4">Progress</th>
                 <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3">Live</th>
+                <th className="px-3 py-3">Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -136,6 +162,32 @@ function PayrollScreen() {
                       <span className={`h-1.5 w-1.5 rounded-full ${r.status_live === 'online' ? 'bg-emerald-500' : 'bg-red-500'}`} />
                       {r.status_live}
                     </span>
+                  </td>
+                  <td className="px-3 py-3">
+                    {editCap === r.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          value={capVal}
+                          onChange={(e) => setCapVal(e.target.value)}
+                          className="w-20 rounded-lg border border-[var(--theme-input)] bg-[var(--theme-card2)] px-2 py-1 text-xs text-[var(--theme-text)]"
+                          autoFocus
+                        />
+                        <button onClick={() => saveCap(r.id)} className="rounded bg-emerald-500 px-2 py-1 text-xs font-semibold text-white">OK</button>
+                        <button onClick={() => setEditCap(null)} className="rounded bg-[var(--theme-card2)] px-2 py-1 text-xs text-[var(--theme-muted)]">✕</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditCap(r.id)
+                          setCapVal(String(r.salary_usd ?? 0))
+                        }}
+                        className="rounded-lg border border-[var(--theme-border)] px-2 py-1 text-xs text-[var(--theme-muted)] hover:text-[var(--theme-text)]"
+                        title={`Ubah cap ${r.name}`}
+                      >
+                        ✏️ Cap
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
