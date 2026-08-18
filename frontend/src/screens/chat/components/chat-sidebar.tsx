@@ -760,6 +760,13 @@ function ChatSidebarComponent({
   const isUsersActive = pathname === '/users'
   const isPlaybookActive = pathname === '/playbook'
   const isIncidentsActive = pathname === '/incidents'
+  const isControlActive = pathname === '/control'
+  const isShiftActive = pathname === '/shift'
+  const isStandupActive = pathname === '/standup'
+  const isTimelineActive = pathname === '/timeline'
+  const isReviewActive = pathname === '/review'
+  const isEmployeesActive = pathname === '/employees'
+  const isVaultActive = pathname === '/vault'
   const isOrgActive = pathname === '/org'
   const isKpiActive = pathname === '/kpi'
   const isPayrollActive = pathname === '/payroll'
@@ -796,7 +803,7 @@ function ChatSidebarComponent({
     {
       kind: 'link',
       to: '/tickets',
-      icon: CheckListIcon,
+      icon: Flag01Icon,
       label: 'Ticketing',
       active: isTicketsActive,
     },
@@ -823,6 +830,13 @@ function ChatSidebarComponent({
     },
     {
       kind: 'link',
+      to: '/control',
+      icon: Radar01Icon,
+      label: 'Control',
+      active: isControlActive,
+    },
+    {
+      kind: 'link',
       to: '/org',
       icon: GridViewIcon,
       label: 'Org Chart',
@@ -834,6 +848,20 @@ function ChatSidebarComponent({
       icon: UserIcon,
       label: 'Team',
       active: isTeamActive,
+    },
+    {
+      kind: 'link',
+      to: '/review',
+      icon: PencilEdit02Icon,
+      label: 'Review',
+      active: isReviewActive,
+    },
+    {
+      kind: 'link',
+      to: '/shift',
+      icon: Clock01Icon,
+      label: 'Shift',
+      active: isShiftActive,
     },
     {
       kind: 'link',
@@ -851,10 +879,31 @@ function ChatSidebarComponent({
     },
     {
       kind: 'link',
+      to: '/kpi',
+      icon: TaskDone01Icon,
+      label: 'KPI',
+      active: isKpiActive,
+    },
+    {
+      kind: 'link',
       to: '/activity',
       icon: ActivitySparkIcon,
       label: 'Activity',
       active: isActivityActive,
+    },
+    {
+      kind: 'link',
+      to: '/standup',
+      icon: Chat01Icon,
+      label: 'Standup',
+      active: isStandupActive,
+    },
+    {
+      kind: 'link',
+      to: '/timeline',
+      icon: TimelineIcon,
+      label: 'Timeline',
+      active: isTimelineActive,
     },
     {
       kind: 'link',
@@ -866,7 +915,7 @@ function ChatSidebarComponent({
     {
       kind: 'link',
       to: '/board',
-      icon: CheckListIcon,
+      icon: GridViewIcon,
       label: 'Board',
       active: isBoardActive,
     },
@@ -876,6 +925,13 @@ function ChatSidebarComponent({
       icon: Alert02Icon,
       label: 'HR',
       active: isHrActive,
+    },
+    {
+      kind: 'link',
+      to: '/employees',
+      icon: UserGroupIcon,
+      label: 'Employees',
+      active: isEmployeesActive,
     },
     {
       kind: 'link',
@@ -992,6 +1048,13 @@ function ChatSidebarComponent({
       icon: BookOpen01Icon,
       label: 'Brain',
       active: isBrainActive,
+    },
+    {
+      kind: 'link',
+      to: '/vault',
+      icon: ArrowDown01Icon,
+      label: 'Vault',
+      active: isVaultActive,
     },
     {
       kind: 'link',
